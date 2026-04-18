@@ -4,7 +4,7 @@
 
 ## 简介
 
-**prison-probe** 是一个基于 Rust 构建的本地优先网络隐私审计工具。它通过多维度探针检测代理透明度、DNS 泄漏、TLS 证书完整性与系统级代理配置，帮助用户在不可信网络环境中验证自身数字隐私边界。
+**prison-probe** 是一个基于 Rust 构建的本地优先网络隐私审计工具。它通过多维度探针检测代理透明度、DNS 泄漏、TLS 证书完整性、JA3 指纹漂移、WebRTC 内网 IP 暴露与系统级代理配置，帮助用户在不可信网络环境中验证自身数字隐私边界。
 
 **核心原则：**
 - 🛡️ **Zero-Trust Self-Validation** — 不信任任何网络层，包括你自己配置的代理
@@ -19,6 +19,12 @@
 # 快速体征扫描（3 秒内完成）
 cargo run --bin prison-probe -- quick
 
+# 深度信道审计（JA3 指纹等）
+cargo run --bin prison-probe -- deep
+
+# 导出扫描报告（JSON + SHA-256）
+cargo run --bin prison-probe -- export --output report.pp-evidence
+
 # JSON 输出
 cargo run --bin prison-probe -- --format json quick
 
@@ -32,12 +38,11 @@ cargo run --bin prison-probe -- stats
 ### GUI (Tauri)
 
 ```bash
-# 开发模式
-cd frontend && npm install
-cargo run --bin prison-probe-gui
-
 # 构建前端
-cd frontend && npm run build
+cd frontend && npm install && npm run build
+
+# 运行桌面应用
+cargo run --bin prison-probe-gui
 ```
 
 ## 已实现功能
@@ -55,6 +60,24 @@ cd frontend && npm run build
 - 隐私健康度评分 + 可视化进度条
 - 扫描历史时间线 + 技术详情面板
 
+### Milestone 3: Deep Inspection ✅
+- `WebRTCLeakProbe` — 本地内网 IP 暴露检测（接口枚举 + STUN 映射）
+- `JA3FingerprintProbe` — 从 rustls ClientHello 提取 JA3 指纹，基线漂移检测
+- **Deep Scan CLI** — `prison-probe deep` 运行深度探测器
+- **报告导出** — `.pp-evidence` 格式（JSON + SHA-256 校验）
+- GUI 支持快速扫描 / 深度审计 / 导出报告三按钮
+
+## 探测器一览
+
+| 探测器 | 类别 | 功能 |
+|--------|------|------|
+| `exit_ip_consistency` | Quick | HTTPS + STUN + DNS 三信道出口 IP 一致性 |
+| `dns_leak` | Quick | whoami DNS 泄漏检测 |
+| `ssl_baseline` | Quick | TLS 证书指纹基线比对 |
+| `webrtc_leak` | Quick | 内网 IP 暴露风险检测 |
+| `sys_config_audit` | Quick | macOS 系统代理配置审计 |
+| `ja3_fingerprint` | Deep | JA3 TLS 指纹计算与漂移检测 |
+
 ## 项目结构
 
 ```
@@ -62,13 +85,7 @@ prison-probe/
 ├── Cargo.toml                  # Workspace 配置
 ├── crates/
 │   ├── core/                   # 核心探测库
-│   │   └── src/
-│   │       ├── probe/          # 探测器实现
-│   │       │   ├── exit_ip.rs
-│   │       │   ├── dns_leak.rs
-│   │       │   ├── ssl_baseline.rs
-│   │       │   └── sys_config.rs
-│   │       └── store/          # SQLite 存储
+│   │   └── src/probe/          # 探测器实现
 │   ├── cli/                    # CLI 二进制
 │   └── gui/                    # Tauri 桌面应用
 ├── frontend/                   # React + Vite 前端
@@ -92,7 +109,7 @@ prison-probe/
 
 - [x] **Milestone 1**: Core Probe — CLI 可用，基本代理检测
 - [x] **Milestone 2**: GUI & System Audit — Tauri + 证书基线 + 系统代理审计
-- [ ] **Milestone 3**: Deep Inspection — JA3/JA4、MTU/TTL、WebRTC ICE
+- [x] **Milestone 3**: Deep Inspection — JA3、WebRTC ICE、Deep Scan、报告导出
 - [ ] **Milestone 4**: Hardening & Release — cargo-vet、渗透测试、开源发布
 
 ## License
