@@ -107,7 +107,6 @@ prison-probe/
 ├── supply-chain/               # cargo-vet 审计配置
 ├── .github/workflows/          # CI/CD
 ├── scripts/                    # 发布脚本 + Homebrew
-└── docs/PRD.md                 # 产品需求文档
 ```
 
 ## 技术栈
