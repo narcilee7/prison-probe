@@ -67,6 +67,7 @@ function DetailPanel({ details }: { details?: Record<string, unknown> }) {
 
 function App() {
   const [scanning, setScanning] = useState(false);
+  const [scanType, setScanType] = useState<"quick" | "deep">("quick");
   const [result, setResult] = useState<ScanResult | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [history, setHistory] = useState<Evidence[]>([]);
@@ -91,11 +92,13 @@ function App() {
     }
   };
 
-  const runScan = async () => {
+  const runScan = async (type: "quick" | "deep") => {
     setScanning(true);
+    setScanType(type);
     setError(null);
     try {
-      const res = await invoke<ScanResult>("run_quick_scan");
+      const cmd = type === "quick" ? "run_quick_scan" : "run_deep_scan";
+      const res = await invoke<ScanResult>(cmd);
       setResult(res);
       await loadStats();
       await loadHistory();
@@ -103,6 +106,18 @@ function App() {
       setError(String(e));
     } finally {
       setScanning(false);
+    }
+  };
+
+  const exportReport = async () => {
+    try {
+      const res = await invoke<{ output: string; record_count: number; sha256: string }>(
+        "export_report",
+        { output: "prison-probe-report.pp-evidence" }
+      );
+      alert(`报告已导出:\n${res.output}\n记录数: ${res.record_count}\nSHA-256: ${res.sha256}`);
+    } catch (e) {
+      alert("导出失败: " + e);
     }
   };
 
@@ -150,13 +165,29 @@ function App() {
                     : "点击按钮开始快速扫描"}
                 </p>
               </div>
-              <button
-                className="scan-btn"
-                onClick={runScan}
-                disabled={scanning}
-              >
-                {scanning ? "扫描中..." : "🔍 快速扫描"}
-              </button>
+              <div className="btn-row">
+                <button
+                  className="scan-btn"
+                  onClick={() => runScan("quick")}
+                  disabled={scanning}
+                >
+                  {scanning && scanType === "quick" ? "扫描中..." : "🔍 快速扫描"}
+                </button>
+                <button
+                  className="scan-btn deep"
+                  onClick={() => runScan("deep")}
+                  disabled={scanning}
+                >
+                  {scanning && scanType === "deep" ? "扫描中..." : "🔬 深度审计"}
+                </button>
+                <button
+                  className="scan-btn export"
+                  onClick={exportReport}
+                  disabled={scanning}
+                >
+                  📄 导出报告
+                </button>
+              </div>
               {error && <p className="error-text">错误: {error}</p>}
             </section>
 

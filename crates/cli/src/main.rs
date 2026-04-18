@@ -48,6 +48,8 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Quick => run_quick_scan(&cli).await,
+        Commands::Deep => run_deep_scan(&cli).await,
+        Commands::Export { ref output } => run_export(&cli, output).await,
         Commands::History { limit } => show_history(&cli, limit).await,
         Commands::Stats => show_stats(&cli).await,
     }
@@ -139,6 +141,147 @@ async fn run_quick_scan(cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_deep_scan(cli: &Cli) -> Result<()> {
+    println!("🔬 启动深度信道审计...\n");
+
+    let ctx = ProbeContext {
+        timeout: Duration::from_secs(20),
+        proxy_url: std::env::var("HTTP_PROXY").ok(),
+    };
+
+    let suite = ProbeSuite::deep_suite();
+    let start = std::time::Instant::now();
+    let results = suite.execute(&ctx).await;
+    let elapsed = start.elapsed();
+
+    let store = EvidenceStore::open(&cli.db)
+        .with_context(|| format!("打开数据库 {} 失败", cli.db))?;
+
+    for evidence in &results {
+        store.save_evidence(evidence).ok();
+    }
+
+    let score = calculate_health_score(&results);
+
+    match cli.format {
+        OutputFormat::Json => {
+            let output = json!({
+                "scan_type": "deep",
+                "elapsed_ms": elapsed.as_millis(),
+                "health_score": score,
+                "results": results,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        OutputFormat::Table => {
+            println!("⏱️  深度审计耗时: {:.2}s\n", elapsed.as_secs_f64());
+            println!("隐私健康度: {}/100", score);
+            print_health_bar(score);
+            println!();
+
+            let mut rows = Vec::new();
+            let mut issue_count = 0;
+
+            for ev in &results {
+                let status = match ev.risk_level {
+                    RiskLevel::Clean => "✓".to_string(),
+                    RiskLevel::Suspicious => "⚠️ ".to_string(),
+                    RiskLevel::Compromised => "✗".to_string(),
+                };
+
+                if ev.risk_level != RiskLevel::Clean {
+                    issue_count += 1;
+                }
+
+                rows.push(EvidenceRow {
+                    status,
+                    probe: ev.probe_name.clone(),
+                    risk: ev.risk_level.as_str().to_string(),
+                    confidence: format!("{:.0}%", ev.confidence * 100.0),
+                    summary: ev.summary.clone(),
+                });
+            }
+
+            if !rows.is_empty() {
+                let table = Table::new(rows).with(Style::modern_rounded()).to_string();
+                println!("{}", table);
+            }
+
+            println!();
+            if issue_count > 0 {
+                println!("⚠️  深度审计发现 {} 项异常", issue_count);
+                for ev in &results {
+                    if ev.risk_level != RiskLevel::Clean {
+                        println!("  • {}: {}", ev.probe_name, ev.summary);
+                        for m in &ev.mitigations {
+                            println!("    ↳ {}", m);
+                        }
+                    }
+                }
+            } else {
+                println!("✓ 深度审计完成，未发现异常");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_export(cli: &Cli, output_path: &str) -> Result<()> {
+    let store = EvidenceStore::open(&cli.db)
+        .with_context(|| format!("打开数据库 {} 失败", cli.db))?;
+
+    let records = store.recent_scans(1000)?;
+
+    if records.is_empty() {
+        println!("暂无扫描记录可导出");
+        return Ok(());
+    }
+
+    let report = json!({
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "tool": "prison-probe",
+        "version": env!("CARGO_PKG_VERSION"),
+        "record_count": records.len(),
+        "records": records.iter().map(|r| json!({
+            "timestamp": r.timestamp,
+            "probe": r.probe_name,
+            "risk": r.risk_level,
+            "confidence": r.confidence,
+            "summary": r.summary,
+        })).collect::<Vec<_>>(),
+    });
+
+    let json_bytes = serde_json::to_vec_pretty(&report)?;
+
+    // 计算 SHA-256 校验
+    let hash = sha256_hex(&json_bytes);
+
+    // 写入文件：JSON + 换行 + SHA-256 校验行
+    let mut content = String::from_utf8(json_bytes)?;
+    content.push('\n');
+    content.push_str(&format!("// SHA-256: {}\n", hash));
+
+    std::fs::write(output_path, content)
+        .with_context(|| format!("写入报告文件 {} 失败", output_path))?;
+
+    println!("✓ 报告已导出: {}", output_path);
+    println!("  记录数: {}", records.len());
+    println!("  SHA-256: {}", hash);
+
+    Ok(())
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use std::fmt::Write;
+    let hash = ring::digest::digest(&ring::digest::SHA256, data);
+    let mut hex = String::with_capacity(64);
+    for byte in hash.as_ref() {
+        write!(&mut hex, "{:02x}", byte).unwrap();
+    }
+    hex
 }
 
 async fn show_history(cli: &Cli, limit: usize) -> Result<()> {

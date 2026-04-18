@@ -6,8 +6,10 @@ use std::time::Duration;
 
 pub mod dns_leak;
 pub mod exit_ip;
+pub mod ja3_fingerprint;
 pub mod ssl_baseline;
 pub mod sys_config;
+pub mod webrtc_leak;
 
 /// 风险等级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,7 +178,16 @@ impl ProbeSuite {
                 Box::new(exit_ip::ExitIPConsistencyProbe::new()),
                 Box::new(dns_leak::DNSLeakProbe::new()),
                 Box::new(ssl_baseline::SSLBaselineProbe::default()),
+                Box::new(webrtc_leak::WebRTCLeakProbe::new()),
                 Box::new(sys_config::SysConfigProbe::new()),
+            ],
+        }
+    }
+
+    pub fn deep_suite() -> Self {
+        Self {
+            probes: vec![
+                Box::new(ja3_fingerprint::JA3FingerprintProbe::default()),
             ],
         }
     }
