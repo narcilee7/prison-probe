@@ -1,0 +1,10 @@
+docs/
+
+
+# Added by cargo
+
+/target
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
