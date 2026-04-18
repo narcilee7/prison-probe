@@ -1,0 +1,43 @@
+{
+  "name": "@prison-probe/cli",
+  "version": "0.1.0",
+  "description": "prison-probe — Local-first network privacy auditing tool",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/narcilee7/prison-probe.git"
+  },
+  "bin": {
+    "pp": "./bin/pp"
+  },
+  "files": [
+    "bin/pp",
+    "scripts/install.js",
+    "vendor/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "keywords": [
+    "privacy",
+    "security",
+    "audit",
+    "dns-leak",
+    "proxy",
+    "vpn",
+    "cli"
+  ]
+}

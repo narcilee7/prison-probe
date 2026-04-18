@@ -29,13 +29,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run tests (core + cli)
-        run: cargo test --workspace --exclude prison-probe-gui
+        run: cargo test --workspace --exclude pp-gui
 
       - name: Run cargo check (all)
         run: cargo check --workspace
 
       - name: Run cargo clippy
-        run: cargo clippy --workspace --exclude prison-probe-gui -- -D warnings
+        run: cargo clippy --workspace --exclude pp-gui -- -D warnings
 
       - name: Run cargo fmt check
         run: cargo fmt -- --check
@@ -71,18 +71,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build CLI release
-        run: cargo build --bin prison-probe --release
+        run: cargo build --bin pp --release
 
       - name: Upload artifact (Unix)
         if: matrix.os != 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: prison-probe-${{ matrix.os }}
-          path: target/release/prison-probe
+          name: pp-${{ matrix.os }}
+          path: target/release/pp
 
       - name: Upload artifact (Windows)
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: prison-probe-${{ matrix.os }}
-          path: target/release/prison-probe.exe
+          name: pp-${{ matrix.os }}
+          path: target/release/pp.exe

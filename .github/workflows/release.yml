@@ -17,16 +17,16 @@ jobs:
         include:
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary: prison-probe
+            binary: pp
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary: prison-probe
+            binary: pp
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary: prison-probe
+            binary: pp
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: prison-probe.exe
+            binary: pp.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +39,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build CLI
-        run: cargo build --bin prison-probe --release --target ${{ matrix.target }}
+        run: cargo build --bin pp --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
@@ -47,7 +47,7 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
           cp README.md LICENSE dist/
-          cd dist && tar czf ../prison-probe-${{ matrix.target }}.tar.gz *
+          cd dist && tar czf ../pp-${{ matrix.target }}.tar.gz *
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
@@ -56,11 +56,11 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
           Copy-Item README.md dist/
           Copy-Item LICENSE dist/
-          Compress-Archive -Path dist/* -DestinationPath prison-probe-${{ matrix.target }}.zip
+          Compress-Archive -Path dist/* -DestinationPath pp-${{ matrix.target }}.zip
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: prison-probe-*
+          files: pp-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

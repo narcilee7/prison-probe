@@ -17,22 +17,22 @@
 
 ```bash
 # 快速体征扫描（3 秒内完成）
-cargo run --bin prison-probe -- quick
+cargo run --bin pp -- quick
 
 # 深度信道审计（JA3 指纹等）
-cargo run --bin prison-probe -- deep
+cargo run --bin pp -- deep
 
 # 导出扫描报告（JSON + SHA-256）
-cargo run --bin prison-probe -- export --output report.pp-evidence
+cargo run --bin pp -- export --output report.pp-evidence
 
 # JSON 输出
-cargo run --bin prison-probe -- --format json quick
+cargo run --bin pp -- --format json quick
 
 # 查看扫描历史
-cargo run --bin prison-probe -- history
+cargo run --bin pp -- history
 
 # 查看统计数据
-cargo run --bin prison-probe -- stats
+cargo run --bin pp -- stats
 ```
 
 ### GUI (Tauri)
@@ -42,7 +42,7 @@ cargo run --bin prison-probe -- stats
 cd frontend && npm install && npm run build
 
 # 运行桌面应用
-cargo run --bin prison-probe-gui
+cargo run --bin pp-gui
 ```
 
 ### Homebrew
@@ -70,7 +70,7 @@ brew install prison-probe
 ### Milestone 3: Deep Inspection ✅
 - `WebRTCLeakProbe` — 本地内网 IP 暴露检测（接口枚举 + STUN 映射）
 - `JA3FingerprintProbe` — 从 rustls ClientHello 提取 JA3 指纹，基线漂移检测
-- **Deep Scan CLI** — `prison-probe deep` 运行深度探测器
+- **Deep Scan CLI** — `pp deep` 运行深度探测器
 - **报告导出** — `.pp-evidence` 格式（JSON + SHA-256 校验）
 - GUI 支持快速扫描 / 深度审计 / 导出报告三按钮
 
@@ -128,10 +128,10 @@ prison-probe/
 
 ```bash
 # 运行测试
-cargo test --workspace --exclude prison-probe-gui
+cargo test --workspace --exclude pp-gui
 
 # 代码检查
-cargo clippy --workspace --exclude prison-probe-gui -- -D warnings
+cargo clippy --workspace --exclude pp-gui -- -D warnings
 cargo fmt -- --check
 
 # 供应链审计

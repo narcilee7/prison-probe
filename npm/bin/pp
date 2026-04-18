@@ -1,0 +1,13 @@
+#!/usr/bin/env node
+const { spawnSync } = require("child_process");
+const path = require("path");
+
+const binaryName = process.platform === "win32" ? "pp.exe" : "pp";
+const binaryPath = path.join(__dirname, "..", "vendor", binaryName);
+
+const result = spawnSync(binaryPath, process.argv.slice(2), {
+  stdio: "inherit",
+  shell: false,
+});
+
+process.exit(result.status ?? 0);
