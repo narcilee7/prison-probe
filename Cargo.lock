@@ -3274,6 +3274,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "prison-probe-core",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

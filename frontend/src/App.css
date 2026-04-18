@@ -127,14 +127,21 @@ body {
   margin: 0;
 }
 
+.btn-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .scan-btn {
-  width: 100%;
+  flex: 1;
+  min-width: 120px;
   padding: 14px;
   background: linear-gradient(135deg, #00c853, #00e676);
   border: none;
   border-radius: 8px;
   color: #000;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.2s;
@@ -147,6 +154,16 @@ body {
 .scan-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.scan-btn.deep {
+  background: linear-gradient(135deg, #2962ff, #448aff);
+  color: #fff;
+}
+
+.scan-btn.export {
+  background: linear-gradient(135deg, #7b1fa2, #ab47bc);
+  color: #fff;
 }
 
 .results {
