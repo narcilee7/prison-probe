@@ -248,3 +248,122 @@ impl ProbeSuite {
         self.probes.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_risk_level_as_str() {
+        assert_eq!(RiskLevel::Clean.as_str(), "Clean");
+        assert_eq!(RiskLevel::Suspicious.as_str(), "Suspicious");
+        assert_eq!(RiskLevel::Compromised.as_str(), "Compromised");
+    }
+
+    #[test]
+    fn test_risk_level_emoji() {
+        assert_eq!(RiskLevel::Clean.emoji(), "✓");
+        assert_eq!(RiskLevel::Suspicious.emoji(), "⚠️");
+        assert_eq!(RiskLevel::Compromised.emoji(), "✗");
+    }
+
+    #[test]
+    fn test_evidence_builder_defaults() {
+        let ev = Evidence::builder("test_probe").build();
+        assert_eq!(ev.probe_name, "test_probe");
+        assert_eq!(ev.risk_level, RiskLevel::Clean);
+        assert_eq!(ev.confidence, 1.0);
+        assert!(ev.summary.is_empty());
+        assert!(ev.technical_details.is_empty());
+        assert!(ev.raw_bytes.is_none());
+        assert!(ev.mitigations.is_empty());
+    }
+
+    #[test]
+    fn test_evidence_builder_chaining() {
+        let ev = Evidence::builder("my_probe")
+            .risk_level(RiskLevel::Compromised)
+            .confidence(0.95)
+            .summary("DNS leak detected")
+            .detail("ip", "192.168.1.1")
+            .detail("count", 3)
+            .mitigation("Use DoH")
+            .mitigation("Check VPN")
+            .build();
+
+        assert_eq!(ev.probe_name, "my_probe");
+        assert_eq!(ev.risk_level, RiskLevel::Compromised);
+        assert_eq!(ev.confidence, 0.95);
+        assert_eq!(ev.summary, "DNS leak detected");
+        assert_eq!(ev.technical_details.get("ip").unwrap(), "192.168.1.1");
+        assert_eq!(ev.technical_details.get("count").unwrap(), 3);
+        assert_eq!(ev.mitigations.len(), 2);
+        assert_eq!(ev.mitigations[0], "Use DoH");
+        assert_eq!(ev.mitigations[1], "Check VPN");
+    }
+
+    #[test]
+    fn test_evidence_builder_confidence_clamping() {
+        let ev_high = Evidence::builder("t").confidence(1.5).build();
+        assert_eq!(ev_high.confidence, 1.0);
+
+        let ev_low = Evidence::builder("t").confidence(-0.5).build();
+        assert_eq!(ev_low.confidence, 0.0);
+    }
+
+    #[test]
+    fn test_evidence_serialization() {
+        let ev = Evidence::builder("ser_test")
+            .risk_level(RiskLevel::Suspicious)
+            .confidence(0.75)
+            .summary("test")
+            .detail("key", "value")
+            .build();
+
+        let json = serde_json::to_string(&ev).expect("serialize");
+        assert!(json.contains("\"probe_name\":\"ser_test\""));
+        assert!(json.contains("\"risk_level\":\"Suspicious\""));
+        assert!(json.contains("\"confidence\":0.75"));
+        assert!(json.contains("\"summary\":\"test\""));
+    }
+
+    #[test]
+    fn test_probe_context_clone() {
+        let ctx = ProbeContext {
+            timeout: Duration::from_secs(5),
+            proxy_url: Some("http://127.0.0.1:7890".to_string()),
+        };
+        let cloned = ctx.clone();
+        assert_eq!(cloned.timeout, ctx.timeout);
+        assert_eq!(cloned.proxy_url, ctx.proxy_url);
+    }
+
+    #[test]
+    fn test_probe_context_default() {
+        let ctx = ProbeContext::default();
+        assert_eq!(ctx.timeout, Duration::from_secs(10));
+        assert!(ctx.proxy_url.is_none());
+    }
+
+    #[test]
+    fn test_probe_suite_quick_len() {
+        let suite = ProbeSuite::quick_suite();
+        assert_eq!(suite.len(), 5);
+        assert!(!suite.is_empty());
+    }
+
+    #[test]
+    fn test_probe_suite_deep_len() {
+        let suite = ProbeSuite::deep_suite();
+        assert_eq!(suite.len(), 1);
+        assert!(!suite.is_empty());
+    }
+
+    #[test]
+    fn test_probe_suite_add() {
+        let mut suite = ProbeSuite::quick_suite();
+        let original_len = suite.len();
+        suite.add(Box::new(crate::probe::ja3_fingerprint::JA3FingerprintProbe::default()));
+        assert_eq!(suite.len(), original_len + 1);
+    }
+}
