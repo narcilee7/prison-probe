@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/*]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests (core + cli)
+        run: cargo test --workspace --exclude prison-probe-gui
+
+      - name: Run cargo check (all)
+        run: cargo check --workspace
+
+      - name: Run cargo clippy
+        run: cargo clippy --workspace --exclude prison-probe-gui -- -D warnings
+
+      - name: Run cargo fmt check
+        run: cargo fmt -- --check
+
+  cargo-vet:
+    name: cargo-vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Install cargo-vet
+        run: cargo install cargo-vet
+
+      - name: Run cargo vet
+        run: cargo vet
+
+  build-cli:
+    name: Build CLI
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build CLI release
+        run: cargo build --bin prison-probe --release
+
+      - name: Upload artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prison-probe-${{ matrix.os }}
+          path: target/release/prison-probe
+
+      - name: Upload artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prison-probe-${{ matrix.os }}
+          path: target/release/prison-probe.exe
