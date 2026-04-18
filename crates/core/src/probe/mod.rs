@@ -6,6 +6,7 @@ use std::time::Duration;
 
 pub mod dns_leak;
 pub mod exit_ip;
+pub mod sys_config;
 
 /// 风险等级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +174,7 @@ impl ProbeSuite {
             probes: vec![
                 Box::new(exit_ip::ExitIPConsistencyProbe::new()),
                 Box::new(dns_leak::DNSLeakProbe::new()),
+                Box::new(sys_config::SysConfigProbe::new()),
             ],
         }
     }
