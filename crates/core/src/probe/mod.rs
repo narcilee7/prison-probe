@@ -6,6 +6,7 @@ use std::time::Duration;
 
 pub mod dns_leak;
 pub mod exit_ip;
+pub mod ja3_fingerprint;
 pub mod ssl_baseline;
 pub mod sys_config;
 pub mod webrtc_leak;
@@ -178,6 +179,7 @@ impl ProbeSuite {
                 Box::new(dns_leak::DNSLeakProbe::new()),
                 Box::new(ssl_baseline::SSLBaselineProbe::default()),
                 Box::new(webrtc_leak::WebRTCLeakProbe::new()),
+                Box::new(ja3_fingerprint::JA3FingerprintProbe::default()),
                 Box::new(sys_config::SysConfigProbe::new()),
             ],
         }
