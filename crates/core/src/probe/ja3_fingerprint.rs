@@ -429,3 +429,97 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_grease() {
+        assert!(is_grease(0x0a0a));
+        assert!(is_grease(0x1a1a));
+        assert!(is_grease(0x2a2a));
+        assert!(!is_grease(0x0000));
+        assert!(!is_grease(0x002f));
+        assert!(!is_grease(0x1301));
+        assert!(!is_grease(0xff01));
+    }
+
+    #[test]
+    fn test_md5_hex() {
+        let h1 = md5_hex("hello");
+        assert_eq!(h1.len(), 32);
+        let h2 = md5_hex("hello");
+        assert_eq!(h1, h2);
+        let h3 = md5_hex("world");
+        assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn test_parse_ja3_fields() {
+        let ja3 = "771,4866-4865-4867,43-51-0,29-23-24,0";
+        let (version, ciphers, extensions, groups, formats) =
+            parse_ja3_fields(ja3).expect("parse ok");
+        assert_eq!(version, 771); // TLS 1.2
+        assert_eq!(ciphers, vec![4866, 4865, 4867]);
+        assert_eq!(extensions, vec![43, 51, 0]);
+        assert_eq!(groups, vec![29, 23, 24]);
+        assert_eq!(formats, vec![0]);
+    }
+
+    #[test]
+    fn test_parse_ja3_fields_empty() {
+        let ja3 = "771,,,,";
+        let (version, ciphers, extensions, groups, formats) =
+            parse_ja3_fields(ja3).expect("parse ok");
+        assert_eq!(version, 771);
+        assert!(ciphers.is_empty());
+        assert!(extensions.is_empty());
+        assert!(groups.is_empty());
+        assert!(formats.is_empty());
+    }
+
+    #[test]
+    fn test_ja3_equivalent_same() {
+        let a = "771,4866-4865,43-51-0,29-23,0";
+        let b = "771,4866-4865,43-51-0,29-23,0";
+        assert!(ja3_equivalent(a, b));
+    }
+
+    #[test]
+    fn test_ja3_equivalent_different_order() {
+        let a = "771,4866-4865,43-51-0,29-23,0";
+        let b = "771,4866-4865,51-0-43,29-23,0";
+        assert!(ja3_equivalent(a, b));
+    }
+
+    #[test]
+    fn test_ja3_not_equivalent_different_ciphers() {
+        let a = "771,4866-4865,43-51-0,29-23,0";
+        let b = "771,4866-4867,43-51-0,29-23,0";
+        assert!(!ja3_equivalent(a, b));
+    }
+
+    #[test]
+    fn test_ja3_not_equivalent_different_version() {
+        let a = "771,4866-4865,43-51-0,29-23,0";
+        let b = "772,4866-4865,43-51-0,29-23,0";
+        assert!(!ja3_equivalent(a, b));
+    }
+
+    #[test]
+    fn test_ja3_baseline_roundtrip() {
+        let test_path = ja3_baseline_path("test.example.com", 443);
+        let _ = std::fs::remove_file(&test_path);
+
+        // 不存在时返回 None
+        assert!(load_ja3_baseline("test.example.com", 443).is_none());
+
+        // 保存并加载
+        save_ja3_baseline("test.example.com", 443, "771,4866,43,29,0", "hash1");
+        let loaded = load_ja3_baseline("test.example.com", 443);
+        assert_eq!(loaded, Some("771,4866,43,29,0".to_string()));
+
+        let _ = std::fs::remove_file(&test_path);
+    }
+}

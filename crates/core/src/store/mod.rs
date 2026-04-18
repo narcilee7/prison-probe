@@ -232,3 +232,107 @@ pub struct StoreStats {
     pub suspicious: i64,
     pub compromised: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::{Evidence, RiskLevel};
+    use std::path::PathBuf;
+
+    fn temp_db_path() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "prison-probe-test-{}-{}.db",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        path
+    }
+
+    fn cleanup(path: &Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+    }
+
+    #[test]
+    fn test_open_and_init() {
+        let path = temp_db_path();
+        let store = EvidenceStore::open(&path);
+        assert!(store.is_ok());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_save_and_recent_scans() {
+        let path = temp_db_path();
+        let store = EvidenceStore::open(&path).unwrap();
+
+        let ev = Evidence::builder("test_probe")
+            .risk_level(RiskLevel::Clean)
+            .confidence(0.95)
+            .summary("All good")
+            .detail("ip", "1.1.1.1")
+            .mitigation("None needed")
+            .build();
+
+        let id = store.save_evidence(&ev).unwrap();
+        assert!(id > 0);
+
+        let scans = store.recent_scans(10).unwrap();
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].probe_name, "test_probe");
+        assert_eq!(scans[0].risk_level, "Clean");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_stats() {
+        let path = temp_db_path();
+        let store = EvidenceStore::open(&path).unwrap();
+
+        let ev1 = Evidence::builder("p1").risk_level(RiskLevel::Clean).confidence(1.0).summary("s1").build();
+        let ev2 = Evidence::builder("p2").risk_level(RiskLevel::Suspicious).confidence(0.8).summary("s2").build();
+        let ev3 = Evidence::builder("p3").risk_level(RiskLevel::Compromised).confidence(0.9).summary("s3").build();
+
+        store.save_evidence(&ev1).unwrap();
+        store.save_evidence(&ev2).unwrap();
+        store.save_evidence(&ev3).unwrap();
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.total_scans, 3);
+        assert_eq!(stats.clean, 1);
+        assert_eq!(stats.suspicious, 1);
+        assert_eq!(stats.compromised, 1);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_cert_baseline_crud() {
+        let path = temp_db_path();
+        let store = EvidenceStore::open(&path).unwrap();
+
+        // 首次保存
+        store.save_cert_baseline("example.com", 443, "abc123", Some("2024-01-01"), Some("2025-01-01")).unwrap();
+
+        // 查询
+        let baseline = store.get_cert_baseline("example.com", 443).unwrap();
+        assert!(baseline.is_some());
+        let b = baseline.unwrap();
+        assert_eq!(b.fingerprint, "abc123");
+        assert_eq!(b.not_before, Some("2024-01-01".to_string()));
+        assert_eq!(b.not_after, Some("2025-01-01".to_string()));
+
+        // 更新
+        store.save_cert_baseline("example.com", 443, "def456", None, None).unwrap();
+        let updated = store.get_cert_baseline("example.com", 443).unwrap().unwrap();
+        assert_eq!(updated.fingerprint, "def456");
+
+        // 不存在的记录
+        let missing = store.get_cert_baseline("notexist.com", 443).unwrap();
+        assert!(missing.is_none());
+        cleanup(&path);
+    }
+}
