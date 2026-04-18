@@ -4,7 +4,7 @@
 
 ## 简介
 
-**prison-probe** 是一个基于 Rust 构建的本地优先网络隐私审计工具。它通过多维度探针检测代理透明度、DNS 泄漏与系统级代理配置，帮助用户在不可信网络环境中验证自身数字隐私边界。
+**prison-probe** 是一个基于 Rust 构建的本地优先网络隐私审计工具。它通过多维度探针检测代理透明度、DNS 泄漏、TLS 证书完整性与系统级代理配置，帮助用户在不可信网络环境中验证自身数字隐私边界。
 
 **核心原则：**
 - 🛡️ **Zero-Trust Self-Validation** — 不信任任何网络层，包括你自己配置的代理
@@ -13,45 +13,66 @@
 
 ## 快速开始
 
+### CLI
+
 ```bash
 # 快速体征扫描（3 秒内完成）
-cargo run -- quick
+cargo run --bin prison-probe -- quick
 
 # JSON 输出
-./prison-probe --format json quick
+cargo run --bin prison-probe -- --format json quick
 
 # 查看扫描历史
-./prison-probe history
+cargo run --bin prison-probe -- history
 
 # 查看统计数据
-./prison-probe stats
+cargo run --bin prison-probe -- stats
 ```
 
-## Milestone 1 已实现
+### GUI (Tauri)
 
-- ✅ Rust 项目脚手架 + 核心模块架构
-- ✅ `ExitIPConsistencyProbe` — 三信道（HTTPS / STUN / DNS）出口 IP 一致性校验
-- ✅ `DNSLeakProbe` — 通过 whoami 服务检测 DNS 泄漏
-- ✅ SQLite 本地存储（scan_history + cert_baseline）
-- ✅ CLI 输出（人类友好表格 + JSON）
+```bash
+# 开发模式
+cd frontend && npm install
+cargo run --bin prison-probe-gui
+
+# 构建前端
+cd frontend && npm run build
+```
+
+## 已实现功能
+
+### Milestone 1: Core Probe ✅
+- `ExitIPConsistencyProbe` — 三信道（HTTPS / STUN / DNS）出口 IP 一致性校验
+- `DNSLeakProbe` — 通过 whoami 服务检测 DNS 泄漏
+- SQLite 本地存储（scan_history + cert_baseline）
+- CLI 输出（人类友好表格 + JSON）
+
+### Milestone 2: GUI & System Audit ✅
+- **Tauri + React 桌面应用** — 暗色主题仪表盘
+- `SSLBaselineProbe` — TLS 证书指纹基线比对与漂移检测
+- `SysConfigProbe` — macOS 系统代理配置审计（networksetup 封装）
+- 隐私健康度评分 + 可视化进度条
+- 扫描历史时间线 + 技术详情面板
 
 ## 项目结构
 
 ```
-.
-├── Cargo.toml
-├── docs/PRD.md              # 产品需求文档
-├── src/
-│   ├── main.rs              # CLI 入口
-│   ├── cli.rs               # 命令行参数
-│   ├── lib.rs               # 库入口
-│   ├── probe/
-│   │   ├── mod.rs           # Probe trait + Evidence 结构
-│   │   ├── exit_ip.rs       # 出口 IP 一致性探测器
-│   │   └── dns_leak.rs      # DNS 泄漏探测器
-│   └── store/
-│       └── mod.rs           # SQLite 证据存储
-└── README.md
+prison-probe/
+├── Cargo.toml                  # Workspace 配置
+├── crates/
+│   ├── core/                   # 核心探测库
+│   │   └── src/
+│   │       ├── probe/          # 探测器实现
+│   │       │   ├── exit_ip.rs
+│   │       │   ├── dns_leak.rs
+│   │       │   ├── ssl_baseline.rs
+│   │       │   └── sys_config.rs
+│   │       └── store/          # SQLite 存储
+│   ├── cli/                    # CLI 二进制
+│   └── gui/                    # Tauri 桌面应用
+├── frontend/                   # React + Vite 前端
+└── docs/PRD.md                 # 产品需求文档
 ```
 
 ## 技术栈
@@ -59,17 +80,18 @@ cargo run -- quick
 | 领域 | 依赖 |
 |------|------|
 | 异步运行时 | `tokio` |
-| HTTP / TLS | `reqwest` + `rustls` |
+| HTTP / TLS | `reqwest` + `rustls` + `tokio-rustls` |
 | DNS | `hickory-resolver` |
 | 存储 | `rusqlite` (bundled) |
 | CLI | `clap` + `tabled` |
+| GUI | `Tauri 2` + `React` + `Vite` |
 | 序列化 | `serde` + `serde_json` |
 | 日志 | `tracing` |
 
 ## Roadmap
 
 - [x] **Milestone 1**: Core Probe — CLI 可用，基本代理检测
-- [ ] **Milestone 2**: GUI & System Audit — Tauri + macOS 代理配置审计
+- [x] **Milestone 2**: GUI & System Audit — Tauri + 证书基线 + 系统代理审计
 - [ ] **Milestone 3**: Deep Inspection — JA3/JA4、MTU/TTL、WebRTC ICE
 - [ ] **Milestone 4**: Hardening & Release — cargo-vet、渗透测试、开源发布
 

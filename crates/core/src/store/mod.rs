@@ -157,6 +157,54 @@ impl EvidenceStore {
             compromised,
         })
     }
+
+    /// 查询证书基线
+    pub fn get_cert_baseline(&self, domain: &str, port: u16) -> Result<Option<CertBaseline>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT fingerprint, not_before, not_after, first_seen, last_seen
+            FROM cert_baseline
+            WHERE domain = ?1 AND port = ?2
+            "#,
+        )?;
+
+        let mut rows = stmt.query_map(params![domain, port], |row| {
+            Ok(CertBaseline {
+                fingerprint: row.get(0)?,
+                not_before: row.get(1)?,
+                not_after: row.get(2)?,
+                first_seen: row.get(3)?,
+                last_seen: row.get(4)?,
+            })
+        })?;
+
+        Ok(rows.next().transpose()?)
+    }
+
+    /// 保存或更新证书基线
+    pub fn save_cert_baseline(
+        &self,
+        domain: &str,
+        port: u16,
+        fingerprint: &str,
+        not_before: Option<&str>,
+        not_after: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO cert_baseline (domain, port, fingerprint, not_before, not_after, first_seen, last_seen)
+            VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))
+            ON CONFLICT(domain, port) DO UPDATE SET
+                fingerprint = excluded.fingerprint,
+                not_before = excluded.not_before,
+                not_after = excluded.not_after,
+                last_seen = datetime('now')
+            "#,
+            params![domain, port, fingerprint, not_before, not_after],
+        ).context("保存证书基线失败")?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -166,6 +214,15 @@ pub struct ScanRecord {
     pub risk_level: String,
     pub confidence: f64,
     pub summary: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CertBaseline {
+    pub fingerprint: String,
+    pub not_before: Option<String>,
+    pub not_after: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
 }
 
 #[derive(Debug)]

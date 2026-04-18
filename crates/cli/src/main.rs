@@ -1,8 +1,10 @@
+mod cli;
+
 use anyhow::{Context, Result};
 use clap::Parser;
-use prison_probe::cli::{Cli, Commands, OutputFormat};
-use prison_probe::probe::{Evidence, ProbeContext, ProbeSuite, RiskLevel};
-use prison_probe::store::EvidenceStore;
+use crate::cli::{Cli, Commands, OutputFormat};
+use prison_probe_core::probe::{Evidence, ProbeContext, ProbeSuite, RiskLevel};
+use prison_probe_core::store::EvidenceStore;
 use serde_json::json;
 use std::io::{self, Write};
 use std::time::Duration;
