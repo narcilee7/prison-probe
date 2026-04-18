@@ -262,6 +262,50 @@ body {
   padding: 40px;
 }
 
+.issue-count {
+  margin-left: 12px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--accent-danger);
+}
+
+.error-text {
+  color: var(--accent-danger);
+  text-align: center;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.detail-panel {
+  margin-top: 10px;
+}
+
+.detail-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.detail-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.detail-content {
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--bg);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  color: #aaa;
+}
+
 .history-table {
   width: 100%;
   border-collapse: collapse;

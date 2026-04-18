@@ -98,6 +98,8 @@ fn calculate_health_score(results: &[prison_probe_core::probe::Evidence]) -> u8 
 }
 
 fn main() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter("info")
         .with_target(false)

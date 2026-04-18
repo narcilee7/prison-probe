@@ -15,6 +15,7 @@ interface Evidence {
   summary: string;
   mitigations: string[];
   timestamp: string;
+  technical_details?: Record<string, unknown>;
 }
 
 interface Stats {
@@ -46,12 +47,31 @@ function HealthBar({ score }: { score: number }) {
   );
 }
 
+function DetailPanel({ details }: { details?: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false);
+  if (!details || Object.keys(details).length === 0) return null;
+
+  return (
+    <div className="detail-panel">
+      <button className="detail-toggle" onClick={() => setOpen(!open)}>
+        {open ? "收起详情 ▲" : "查看详情 ▼"}
+      </button>
+      {open && (
+        <pre className="detail-content">
+          {JSON.stringify(details, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [history, setHistory] = useState<Evidence[]>([]);
   const [activeTab, setActiveTab] = useState<"dashboard" | "history">("dashboard");
+  const [error, setError] = useState<string | null>(null);
 
   const loadStats = async () => {
     try {
@@ -73,13 +93,14 @@ function App() {
 
   const runScan = async () => {
     setScanning(true);
+    setError(null);
     try {
       const res = await invoke<ScanResult>("run_quick_scan");
       setResult(res);
       await loadStats();
       await loadHistory();
     } catch (e) {
-      alert("扫描失败: " + e);
+      setError(String(e));
     } finally {
       setScanning(false);
     }
@@ -89,6 +110,10 @@ function App() {
     loadStats();
     loadHistory();
   }, []);
+
+  const issueCount = result?.results.filter(
+    (r) => r.risk_level !== "Clean"
+  ).length ?? 0;
 
   return (
     <div className="app">
@@ -132,11 +157,17 @@ function App() {
               >
                 {scanning ? "扫描中..." : "🔍 快速扫描"}
               </button>
+              {error && <p className="error-text">错误: {error}</p>}
             </section>
 
             {result && (
               <section className="card">
-                <h2>扫描结果</h2>
+                <h2>
+                  扫描结果
+                  {issueCount > 0 && (
+                    <span className="issue-count">发现 {issueCount} 项异常</span>
+                  )}
+                </h2>
                 <div className="results">
                   {result.results.map((ev, idx) => (
                     <div key={idx} className="result-item">
@@ -155,6 +186,7 @@ function App() {
                           ))}
                         </ul>
                       )}
+                      <DetailPanel details={ev.technical_details} />
                     </div>
                   ))}
                 </div>
