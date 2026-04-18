@@ -179,8 +179,15 @@ impl ProbeSuite {
                 Box::new(dns_leak::DNSLeakProbe::new()),
                 Box::new(ssl_baseline::SSLBaselineProbe::default()),
                 Box::new(webrtc_leak::WebRTCLeakProbe::new()),
-                Box::new(ja3_fingerprint::JA3FingerprintProbe::default()),
                 Box::new(sys_config::SysConfigProbe::new()),
+            ],
+        }
+    }
+
+    pub fn deep_suite() -> Self {
+        Self {
+            probes: vec![
+                Box::new(ja3_fingerprint::JA3FingerprintProbe::default()),
             ],
         }
     }

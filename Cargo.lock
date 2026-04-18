@@ -3229,8 +3229,10 @@ name = "prison-probe"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "prison-probe-core",
+ "ring",
  "serde_json",
  "tabled",
  "tokio",

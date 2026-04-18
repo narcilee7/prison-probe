@@ -21,6 +21,14 @@ pub struct Cli {
 pub enum Commands {
     /// 快速体征扫描（3 秒内完成）
     Quick,
+    /// 深度信道审计（JA3 指纹、MTU/TTL 等）
+    Deep,
+    /// 导出扫描报告
+    Export {
+        /// 输出文件路径
+        #[arg(short, long, default_value = "report.pp-evidence")]
+        output: String,
+    },
     /// 查看扫描历史
     History {
         /// 显示条数
