@@ -2,7 +2,7 @@ use crate::probe::{Evidence, EvidenceBuilder, Probe, ProbeCategory, ProbeContext
 use crate::store::EvidenceStore;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::ServerName;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -38,10 +38,13 @@ impl SSLBaselineProbe {
         // 确保 rustls crypto provider 已安装
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        // 使用不验证证书的客户端配置（我们只需要获取证书，不需要信任它）
+        // 使用系统根证书验证：若证书不被信任（如自签名 MITM），握手会失败，
+        // 从而避免恶意证书被保存为基线。企业级合法 SSL 检查（使用受信 CA）
+        // 仍可通过，其证书会被正常记录供用户审查。
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let config = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoVerifier))
+            .with_root_certificates(root_store)
             .with_no_client_auth();
 
         let connector = TlsConnector::from(Arc::new(config));
@@ -248,51 +251,6 @@ impl Default for SSLBaselineProbe {
     }
 }
 
-/// 不验证证书（仅用于获取证书本身）
-#[derive(Debug)]
-struct NoVerifier;
-
-impl rustls::client::danger::ServerCertVerifier for NoVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ED25519,
-        ]
-    }
-}
 
 /// 将 DER 证书转换为 PEM 格式
 fn cert_to_pem(der: &[u8]) -> String {

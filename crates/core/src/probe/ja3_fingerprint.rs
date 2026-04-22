@@ -25,52 +25,34 @@ impl JA3FingerprintProbe {
     async fn compute_ja3(&self) -> Result<(String, String)> {
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        let domain = self.domain.clone();
-        let port = self.port;
+        // 使用系统根证书验证配置。
+        // write_tls() 在此阶段只生成 ClientHello 字节，不会触发服务器证书验证，
+        // 但使用正常配置可避免未来误用此 config 进行不安全连接。
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
 
-        // 异步解析域名
-        let addrs: Vec<_> = tokio::net::lookup_host(format!("{}:{}", domain, port))
-            .await
-            .with_context(|| format!("域名解析失败: {}", domain))?
-            .collect();
+        let server_name = ServerName::try_from(self.domain.clone())
+            .map_err(|e| anyhow::anyhow!("无效的服务器名称: {}", e))?;
 
-        if addrs.is_empty() {
-            anyhow::bail!("域名解析无结果: {}", domain);
+        let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+            .context("创建 TLS 连接失败")?;
+
+        // 获取 ClientHello TLS 记录（纯内存操作，无需网络连接）
+        let mut buf = Vec::new();
+        let n = conn.write_tls(&mut buf)
+            .context("获取 TLS 记录失败")?;
+
+        if n == 0 {
+            anyhow::bail!("未能生成 ClientHello TLS 记录");
         }
 
-        tokio::task::spawn_blocking(move || {
-            let stream = std::net::TcpStream::connect_timeout(&addrs[0], Duration::from_secs(10))
-                .context("TCP 连接失败")?;
+        let ja3_str = parse_ja3_from_tls_records(&buf)?;
+        let ja3_hash = md5_hex(&ja3_str);
 
-            // 使用不验证证书的配置（我们只需要 ClientHello 字节）
-            let config = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoVerifier))
-                .with_no_client_auth();
-
-            let server_name = ServerName::try_from(domain)
-                .map_err(|e| anyhow::anyhow!("无效的服务器名称: {}", e))?;
-
-            let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
-                .context("创建 TLS 连接失败")?;
-
-            // 获取 ClientHello TLS 记录
-            let mut buf = Vec::new();
-            let n = conn.write_tls(&mut buf)
-                .context("获取 TLS 记录失败")?;
-
-            if n == 0 {
-                anyhow::bail!("未能生成 ClientHello TLS 记录");
-            }
-
-            // 关闭连接（我们只需要 ClientHello，不需要完成握手）
-            drop(stream);
-
-            let ja3_str = parse_ja3_from_tls_records(&buf)?;
-            let ja3_hash = md5_hex(&ja3_str);
-
-            Ok((ja3_str, ja3_hash))
-        }).await?
+        Ok((ja3_str, ja3_hash))
     }
 }
 
@@ -401,51 +383,6 @@ fn ja3_equivalent(a: &str, b: &str) -> bool {
     ea_sorted == eb_sorted
 }
 
-/// 不验证证书（仅用于获取 ClientHello 字节）
-#[derive(Debug)]
-struct NoVerifier;
-
-impl rustls::client::danger::ServerCertVerifier for NoVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ED25519,
-        ]
-    }
-}
 
 #[cfg(test)]
 mod tests {
