@@ -267,6 +267,41 @@ impl Default for ExitIPConsistencyProbe {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ip_from_json_ip() {
+        let text = r#"{"ip": "1.2.3.4"}"#;
+        assert_eq!(parse_ip_from_text(text), Some("1.2.3.4".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_parse_ip_from_json_origin() {
+        let text = r#"{"origin": "203.0.113.5"}"#;
+        assert_eq!(parse_ip_from_text(text), Some("203.0.113.5".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_parse_ip_plain_text() {
+        let text = "  198.51.100.42  \n";
+        assert_eq!(parse_ip_from_text(text), Some("198.51.100.42".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_extract_ip_from_text() {
+        let text = "Your IP address is 192.0.2.1 and port 8080";
+        assert_eq!(extract_ip_from_text(text), Some("192.0.2.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_parse_ip_invalid() {
+        let text = "no ip here";
+        assert_eq!(parse_ip_from_text(text), None);
+    }
+}
+
 /// 从文本中解析 IP 地址
 fn parse_ip_from_text(text: &str) -> Option<IpAddr> {
     let trimmed = text.trim();

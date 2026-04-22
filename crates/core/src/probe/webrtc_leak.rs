@@ -234,4 +234,55 @@ impl Default for WebRTCLeakProbe {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_private_ipv4() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(probe.is_private_ip("10.0.0.1".parse().unwrap()));
+        assert!(probe.is_private_ip("172.16.5.5".parse().unwrap()));
+        assert!(probe.is_private_ip("192.168.1.1".parse().unwrap()));
+        assert!(probe.is_private_ip("127.0.0.1".parse().unwrap()));
+        assert!(probe.is_private_ip("100.64.0.1".parse().unwrap()));
+        assert!(probe.is_private_ip("169.254.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_public_ipv4() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(!probe.is_private_ip("8.8.8.8".parse().unwrap()));
+        assert!(!probe.is_private_ip("1.1.1.1".parse().unwrap()));
+        assert!(!probe.is_private_ip("203.0.113.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_private_ipv6() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(probe.is_private_ip("fc00::1".parse().unwrap()));
+        assert!(probe.is_private_ip("fe80::1".parse().unwrap()));
+        assert!(probe.is_private_ip("::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_public_ipv6() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(!probe.is_private_ip("2001:4860:4860::8888".parse().unwrap()));
+        assert!(!probe.is_private_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_vpn_interface_detection() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(probe.is_vpn_interface("utun3"));
+        assert!(probe.is_vpn_interface("tun0"));
+        assert!(probe.is_vpn_interface("wg0"));
+        assert!(probe.is_vpn_interface("vpn-ipv4"));
+        assert!(!probe.is_vpn_interface("en0"));
+        assert!(!probe.is_vpn_interface("eth0"));
+        assert!(!probe.is_vpn_interface("Wi-Fi"));
+    }
+}
+
 

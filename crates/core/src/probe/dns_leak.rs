@@ -324,3 +324,25 @@ impl Default for DNSLeakProbe {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_known_public_dns() {
+        let probe = DNSLeakProbe::new();
+        assert!(probe.is_known_public_dns("1.1.1.1".parse().unwrap()));
+        assert!(probe.is_known_public_dns("8.8.8.8".parse().unwrap()));
+        assert!(probe.is_known_public_dns("223.5.5.5".parse().unwrap()));
+        assert!(probe.is_known_public_dns("119.29.29.29".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_unknown_dns() {
+        let probe = DNSLeakProbe::new();
+        assert!(!probe.is_known_public_dns("192.168.1.1".parse().unwrap()));
+        assert!(!probe.is_known_public_dns("10.0.0.1".parse().unwrap()));
+        assert!(!probe.is_known_public_dns("172.16.0.1".parse().unwrap()));
+    }
+}

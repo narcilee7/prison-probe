@@ -156,3 +156,62 @@ fn align_offset(offset: &mut usize) {
         *offset += 4 - (*offset % 4);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造一个 IPv4 XOR-MAPPED-ADDRESS 的 STUN Success Response
+    fn build_stun_response_ipv4(tx_id: &[u8; 12], mapped_ip: Ipv4Addr, mapped_port: u16) -> Vec<u8> {
+        let ip_u32 = u32::from_be_bytes(mapped_ip.octets());
+        let x_addr = ip_u32 ^ 0x2112A442;
+        let x_port = mapped_port ^ 0x2112;
+
+        let attr_len = 8u16;
+        let msg_len = attr_len;
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x0101u16.to_be_bytes()); // Binding Success Response
+        buf.extend_from_slice(&msg_len.to_be_bytes());
+        buf.extend_from_slice(&0x2112A442u32.to_be_bytes()); // Magic Cookie
+        buf.extend_from_slice(tx_id);
+        // XOR-MAPPED-ADDRESS
+        buf.extend_from_slice(&0x0020u16.to_be_bytes()); // Attribute Type
+        buf.extend_from_slice(&attr_len.to_be_bytes()); // Attribute Length
+        buf.push(0); // Reserved
+        buf.push(0x01); // IPv4 Family
+        buf.extend_from_slice(&x_port.to_be_bytes());
+        buf.extend_from_slice(&x_addr.to_be_bytes());
+        buf
+    }
+
+    #[test]
+    fn test_parse_stun_ipv4() {
+        let tx_id = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let response = build_stun_response_ipv4(&tx_id, Ipv4Addr::new(203, 0, 113, 1), 54321);
+        let result = parse_stun_response(&response, &tx_id);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)));
+    }
+
+    #[test]
+    fn test_parse_stun_wrong_tx_id() {
+        let tx_id = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let wrong_tx_id = [99u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let response = build_stun_response_ipv4(&tx_id, Ipv4Addr::new(8, 8, 8, 8), 12345);
+        let result = parse_stun_response(&response, &wrong_tx_id);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Transaction ID"));
+    }
+
+    #[test]
+    fn test_parse_stun_bad_magic() {
+        let tx_id = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let mut response = build_stun_response_ipv4(&tx_id, Ipv4Addr::new(8, 8, 8, 8), 12345);
+        // Corrupt magic cookie
+        response[4] = 0xFF;
+        let result = parse_stun_response(&response, &tx_id);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Magic Cookie"));
+    }
+}
