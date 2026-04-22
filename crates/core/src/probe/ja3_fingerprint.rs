@@ -88,14 +88,26 @@ impl Probe for JA3FingerprintProbe {
         Duration::from_secs(15)
     }
 
-    async fn run(&self, _ctx: &ProbeContext) -> Result<Evidence> {
-        let (ja3_str, ja3_hash) = self.compute_ja3().await?;
+    async fn run(&self, ctx: &ProbeContext) -> Result<Evidence> {
+        let domain = if self.domain == "cloudflare.com" {
+            ctx.target_domain.clone()
+        } else {
+            self.domain.clone()
+        };
+        let port = if self.port == 443 {
+            ctx.target_port
+        } else {
+            self.port
+        };
 
-        let baseline = load_ja3_baseline(&self.domain, self.port);
+        let target = Self::new(&domain, port);
+        let (ja3_str, ja3_hash) = target.compute_ja3().await?;
+
+        let baseline = load_ja3_baseline(&domain, port);
 
         let details = EvidenceBuilder::new(self.name())
-            .detail("domain", &self.domain)
-            .detail("port", self.port)
+            .detail("domain", &domain)
+            .detail("port", port)
             .detail("ja3_hash", &ja3_hash)
             .detail("ja3_string", &ja3_str)
             .detail("baseline_exists", baseline.is_some());
@@ -129,7 +141,7 @@ impl Probe for JA3FingerprintProbe {
             }
             None => {
                 // 首次建立基线
-                save_ja3_baseline(&self.domain, self.port, &ja3_str, &ja3_hash);
+                save_ja3_baseline(&domain, port, &ja3_str, &ja3_hash);
                 Ok(details
                     .risk_level(RiskLevel::Clean)
                     .confidence(0.85)

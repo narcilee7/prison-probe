@@ -51,6 +51,10 @@ pub enum ProbeCategory {
 pub struct ProbeContext {
     pub timeout: Duration,
     pub proxy_url: Option<String>,
+    /// SSL/JA3 探测的目标域名，默认为 cloudflare.com
+    pub target_domain: String,
+    /// SSL/JA3 探测的目标端口，默认为 443
+    pub target_port: u16,
 }
 
 impl Default for ProbeContext {
@@ -58,6 +62,8 @@ impl Default for ProbeContext {
         Self {
             timeout: Duration::from_secs(10),
             proxy_url: None,
+            target_domain: "cloudflare.com".to_string(),
+            target_port: 443,
         }
     }
 }
@@ -331,10 +337,14 @@ mod tests {
         let ctx = ProbeContext {
             timeout: Duration::from_secs(5),
             proxy_url: Some("http://127.0.0.1:7890".to_string()),
+            target_domain: "example.com".to_string(),
+            target_port: 8443,
         };
         let cloned = ctx.clone();
         assert_eq!(cloned.timeout, ctx.timeout);
         assert_eq!(cloned.proxy_url, ctx.proxy_url);
+        assert_eq!(cloned.target_domain, ctx.target_domain);
+        assert_eq!(cloned.target_port, ctx.target_port);
     }
 
     #[test]
@@ -342,6 +352,8 @@ mod tests {
         let ctx = ProbeContext::default();
         assert_eq!(ctx.timeout, Duration::from_secs(10));
         assert!(ctx.proxy_url.is_none());
+        assert_eq!(ctx.target_domain, "cloudflare.com");
+        assert_eq!(ctx.target_port, 443);
     }
 
     #[test]

@@ -124,18 +124,31 @@ impl Probe for SSLBaselineProbe {
     }
 
     async fn run(&self, ctx: &ProbeContext) -> Result<Evidence> {
-        let cert_info = self.fetch_cert(ctx.timeout).await?;
+        let domain = if self.domain == "cloudflare.com" {
+            &ctx.target_domain
+        } else {
+            &self.domain
+        };
+        let port = if self.port == 443 {
+            ctx.target_port
+        } else {
+            self.port
+        };
+
+        // 构建临时 probe 用于获取证书
+        let target = Self::new(domain, port);
+        let cert_info = target.fetch_cert(ctx.timeout).await?;
 
         // 打开数据库查询基线
         let store = EvidenceStore::open("prison-probe.db").ok();
 
         let baseline = store.as_ref().and_then(|s| {
-            s.get_cert_baseline(&self.domain, self.port).ok().flatten()
+            s.get_cert_baseline(domain, port).ok().flatten()
         });
 
         let details = EvidenceBuilder::new(self.name())
-            .detail("domain", &self.domain)
-            .detail("port", self.port)
+            .detail("domain", domain)
+            .detail("port", port)
             .detail("fingerprint", &cert_info.fingerprint)
             .detail("not_before", &cert_info.not_before)
             .detail("not_after", &cert_info.not_after)
@@ -146,7 +159,7 @@ impl Probe for SSLBaselineProbe {
                 if prev.fingerprint == cert_info.fingerprint {
                     // 指纹一致，仅更新 last_seen
                     if let Some(ref s) = store {
-                        s.touch_cert_baseline(&self.domain, self.port).ok();
+                        s.touch_cert_baseline(domain, port).ok();
                     }
                     Ok(details
                         .risk_level(RiskLevel::Clean)
@@ -165,8 +178,8 @@ impl Probe for SSLBaselineProbe {
                         // 正常轮换：更新基线
                         if let Some(ref s) = store {
                             s.save_cert_baseline(
-                                &self.domain,
-                                self.port,
+                                domain,
+                                port,
                                 &cert_info.fingerprint,
                                 cert_info.not_before.as_deref(),
                                 cert_info.not_after.as_deref(),
@@ -207,8 +220,8 @@ impl Probe for SSLBaselineProbe {
                 // 首次建立基线
                 if let Some(ref s) = store {
                     s.save_cert_baseline(
-                        &self.domain,
-                        self.port,
+                        domain,
+                        port,
                         &cert_info.fingerprint,
                         cert_info.not_before.as_deref(),
                         cert_info.not_after.as_deref(),

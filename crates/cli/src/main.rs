@@ -62,6 +62,8 @@ async fn run_quick_scan(cli: &Cli) -> Result<()> {
     let ctx = ProbeContext {
         timeout: Duration::from_secs(15),
         proxy_url: std::env::var("HTTP_PROXY").ok(),
+        target_domain: cli.target_domain.clone(),
+        target_port: cli.target_port,
     };
 
     let suite = ProbeSuite::quick_suite();
@@ -150,6 +152,8 @@ async fn run_deep_scan(cli: &Cli) -> Result<()> {
     let ctx = ProbeContext {
         timeout: Duration::from_secs(20),
         proxy_url: std::env::var("HTTP_PROXY").ok(),
+        target_domain: cli.target_domain.clone(),
+        target_port: cli.target_port,
     };
 
     let suite = ProbeSuite::deep_suite();
