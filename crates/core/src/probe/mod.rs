@@ -198,47 +198,45 @@ impl ProbeSuite {
     }
 
     pub async fn execute(&self, ctx: &ProbeContext) -> Vec<Evidence> {
-        let mut results = Vec::with_capacity(self.probes.len());
+        use futures::future::join_all;
 
-        for probe in &self.probes {
+        let futures = self.probes.iter().map(|probe| {
             let name = probe.name();
             let timeout = probe.timeout();
             let probe_ctx = ProbeContext { timeout, ..ctx.clone() };
 
-            let result = tokio::time::timeout(timeout, probe.run(&probe_ctx)).await;
+            async move {
+                let result = tokio::time::timeout(timeout, probe.run(&probe_ctx)).await;
 
-            match result {
-                Ok(Ok(evidence)) => {
-                    tracing::info!(probe = name, risk = ?evidence.risk_level, "probe completed");
-                    results.push(evidence);
-                }
-                Ok(Err(e)) => {
-                    tracing::error!(probe = name, error = %e, "probe failed");
-                    results.push(
+                match result {
+                    Ok(Ok(evidence)) => {
+                        tracing::info!(probe = name, risk = ?evidence.risk_level, "probe completed");
+                        evidence
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(probe = name, error = %e, "probe failed");
                         Evidence::builder(name)
                             .risk_level(RiskLevel::Suspicious)
                             .confidence(0.5)
                             .summary(format!("探测器执行失败: {}", e))
                             .detail("error", e.to_string())
                             .mitigation("请检查网络连接并重新运行扫描")
-                            .build(),
-                    );
-                }
-                Err(_) => {
-                    tracing::warn!(probe = name, "probe timed out");
-                    results.push(
+                            .build()
+                    }
+                    Err(_) => {
+                        tracing::warn!(probe = name, "probe timed out");
                         Evidence::builder(name)
                             .risk_level(RiskLevel::Suspicious)
                             .confidence(0.5)
                             .summary(format!("探测器超时 (>{:?})", timeout))
                             .mitigation("请检查网络连接或稍后重试")
-                            .build(),
-                    );
+                            .build()
+                    }
                 }
             }
-        }
+        });
 
-        results
+        join_all(futures).await
     }
 
     pub fn len(&self) -> usize {

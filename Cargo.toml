@@ -31,6 +31,7 @@ hickory-resolver = { version = "0.25", features = ["tokio"] }
 
 # Misc
 rand = "0.8"
+futures = "0.3"
 regex = "1"
 base64 = "0.22"
 ring = "0.17"
