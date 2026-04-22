@@ -27,4 +27,5 @@ ring = { workspace = true }
 local-ip-address = { workspace = true }
 hex = { workspace = true }
 md-5 = { workspace = true }
+x509-parser = { workspace = true }
 rusqlite = { workspace = true }

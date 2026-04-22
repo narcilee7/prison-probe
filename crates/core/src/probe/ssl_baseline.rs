@@ -88,9 +88,8 @@ impl SSLBaselineProbe {
         // 计算 SHA-256 指纹
         let fingerprint = sha256_hex(der_bytes);
 
-        // 解析证书时间信息 (简化：暂不解析 ASN.1)
-        let not_before = None;
-        let not_after = None;
+        // 解析证书时间信息
+        let (not_before, not_after) = parse_cert_times(der_bytes).unwrap_or((None, None));
 
         Ok(CertInfo {
             fingerprint,
@@ -288,6 +287,17 @@ fn cert_to_pem(der: &[u8]) -> String {
     }
     pem.push_str("-----END CERTIFICATE-----\n");
     pem
+}
+
+/// 从 DER 证书中提取有效时间
+fn parse_cert_times(der: &[u8]) -> Result<(Option<String>, Option<String>)> {
+    use x509_parser::prelude::*;
+    let (_, cert) = X509Certificate::from_der(der)
+        .map_err(|e| anyhow::anyhow!("解析 X.509 证书失败: {}", e))?;
+    let validity = cert.validity();
+    let nb = Some(validity.not_before.to_datetime().to_string());
+    let na = Some(validity.not_after.to_datetime().to_string());
+    Ok((nb, na))
 }
 
 /// 判断是否为正常证书轮换
