@@ -40,8 +40,16 @@ impl WebRTCLeakProbe {
                 if octets[0] == 192 && octets[1] == 168 {
                     return true;
                 }
-                // 127.0.0.0/8 (loopback) — WebRTC 通常不会暴露 loopback，但我们也标记
+                // 127.0.0.0/8 (loopback)
                 if octets[0] == 127 {
+                    return true;
+                }
+                // 100.64.0.0/10 (CGNAT / carrier-grade NAT)
+                if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+                    return true;
+                }
+                // 169.254.0.0/16 (link-local)
+                if octets[0] == 169 && octets[1] == 254 {
                     return true;
                 }
                 false
@@ -63,6 +71,17 @@ impl WebRTCLeakProbe {
                 false
             }
         }
+    }
+
+    /// 判断接口名是否属于 VPN/TUN 类型
+    fn is_vpn_interface(&self, name: &str) -> bool {
+        let lower = name.to_lowercase();
+        [
+            "tun", "utun", "tap", "vpn", "wg", "wireguard", "ppp",
+            "ipsec", "l2tp", "pptp", "openvpn", "nordlynx", "proton",
+        ]
+        .iter()
+        .any(|&prefix| lower.contains(prefix))
     }
 
     /// 通过 STUN 获取公网映射 IP
@@ -108,13 +127,20 @@ impl Probe for WebRTCLeakProbe {
             .cloned()
             .collect();
 
+        let vpn_interfaces: Vec<_> = local_ips
+            .iter()
+            .filter(|(name, _)| self.is_vpn_interface(name))
+            .cloned()
+            .collect();
+
         // 2. STUN 映射 IP
         let stun_result = self.get_stun_mapped_ip(ctx.timeout).await;
 
         let mut details = EvidenceBuilder::new(self.name())
             .detail("total_interfaces", local_ips.len())
             .detail("private_ips_count", private_ips.len())
-            .detail("non_loopback_private_count", non_loopback_private.len());
+            .detail("non_loopback_private_count", non_loopback_private.len())
+            .detail("vpn_interfaces_count", vpn_interfaces.len());
 
         // 记录所有接口
         let iface_list: Vec<_> = local_ips
@@ -123,13 +149,22 @@ impl Probe for WebRTCLeakProbe {
             .collect();
         details = details.detail("interfaces", iface_list);
 
+        // 记录 VPN 接口
+        if !vpn_interfaces.is_empty() {
+            let vpn_list: Vec<_> = vpn_interfaces
+                .iter()
+                .map(|(name, ip)| format!("{}: {}", name, ip))
+                .collect();
+            details = details.detail("vpn_interfaces", vpn_list);
+        }
+
         // 记录内网地址
         if !non_loopback_private.is_empty() {
             let leak_list: Vec<_> = non_loopback_private
                 .iter()
                 .map(|(name, ip)| format!("{}: {}", name, ip))
                 .collect();
-            details = details.detail("leaked_private_ips", leak_list);
+            details = details.detail("private_ips", leak_list);
         }
 
         // 记录 STUN 结果
@@ -142,36 +177,52 @@ impl Probe for WebRTCLeakProbe {
             }
         }
 
-        // 3. 风险判定
+        // 3. 风险判定（改进版：区分普通内网与 VPN 场景）
         if non_loopback_private.is_empty() {
-            // 没有内网地址（罕见，通常是容器/VPN 环境）
             Ok(details
                 .risk_level(RiskLevel::Clean)
                 .confidence(0.9)
                 .summary("未发现非 loopback 的内网 IP 地址")
                 .mitigation("当前网络环境可能为公网直连或容器化环境，WebRTC 本地 IP 暴露风险较低")
                 .build())
-        } else {
-            // 有内网地址！WebRTC 可能暴露
+        } else if vpn_interfaces.is_empty() {
+            // 普通内网环境（家庭/办公室）：WebRTC 暴露内网 IP 是预期行为，非漏洞
             let leaked = non_loopback_private
                 .iter()
                 .map(|(_, ip)| ip.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            let summary = format!(
-                "检测到 {} 个内网 IP 地址可能被 WebRTC 暴露: {}",
-                non_loopback_private.len(),
-                leaked
-            );
+            Ok(details
+                .risk_level(RiskLevel::Clean)
+                .confidence(0.75)
+                .summary(format!(
+                    "检测到 {} 个内网 IP (普通网络环境，WebRTC 暴露属预期行为): {}",
+                    non_loopback_private.len(),
+                    leaked
+                ))
+                .mitigation("在家庭/办公室等普通内网中，WebRTC 暴露本地 IP 是标准行为")
+                .mitigation("如使用 VPN，建议配合禁用 WebRTC 的浏览器扩展以确保隐私")
+                .build())
+        } else {
+            // 存在 VPN 接口 + 内网 IP：WebRTC 可能绕过 VPN 隧道
+            let leaked = non_loopback_private
+                .iter()
+                .map(|(_, ip)| ip.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
 
             Ok(details
-                .risk_level(RiskLevel::Compromised)
-                .confidence(0.88)
-                .summary(summary)
-                .mitigation("WebRTC 可能在建立 P2P 连接时暴露你的真实内网 IP 地址")
-                .mitigation("建议在浏览器或应用设置中禁用 WebRTC，或使用禁用 WebRTC 的浏览器扩展")
-                .mitigation("通过 VPN 时，WebRTC 可能绕过 VPN 隧道直接暴露本地 IP")
+                .risk_level(RiskLevel::Suspicious)
+                .confidence(0.82)
+                .summary(format!(
+                    "VPN 环境下检测到 {} 个内网 IP，WebRTC 可能绕过 VPN 隧道暴露: {}",
+                    non_loopback_private.len(),
+                    leaked
+                ))
+                .mitigation("WebRTC 可能通过本地接口绕过 VPN，暴露真实内网拓扑")
+                .mitigation("建议在浏览器中禁用 WebRTC，或使用 uBlock Origin / WebRTC Control 等扩展")
+                .mitigation("确认 VPN 是否提供 WebRTC 泄漏保护功能")
                 .build())
         }
     }
