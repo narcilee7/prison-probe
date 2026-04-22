@@ -112,7 +112,7 @@ async fn run_deep_scan() -> Result<ScanResult, String> {
 #[tauri::command]
 async fn export_report(output: String) -> Result<serde_json::Value, String> {
     let store = EvidenceStore::open("prison-probe.db").map_err(|e| e.to_string())?;
-    let records = store.recent_scans(1000).map_err(|e| e.to_string())?;
+    let records = store.recent_scans_full(1000).map_err(|e| e.to_string())?;
 
     if records.is_empty() {
         return Ok(serde_json::json!({"message": "暂无扫描记录可导出"}));
@@ -123,13 +123,29 @@ async fn export_report(output: String) -> Result<serde_json::Value, String> {
         "tool": "prison-probe",
         "version": env!("CARGO_PKG_VERSION"),
         "record_count": records.len(),
-        "records": records.iter().map(|r| serde_json::json!({
-            "timestamp": r.timestamp,
-            "probe": r.probe_name,
-            "risk": r.risk_level,
-            "confidence": r.confidence,
-            "summary": r.summary,
-        })).collect::<Vec<_>>(),
+        "records": records.iter().map(|r| {
+            let mut obj = serde_json::json!({
+                "timestamp": r.timestamp,
+                "probe": r.probe_name,
+                "risk": r.risk_level,
+                "confidence": r.confidence,
+                "summary": r.summary,
+            });
+            if let Some(ref details) = r.details {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details) {
+                    obj["technical_details"] = parsed;
+                }
+            }
+            if let Some(ref mitigations) = r.mitigations {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(mitigations) {
+                    obj["mitigations"] = parsed;
+                }
+            }
+            if let Some(ref raw) = r.raw_bytes {
+                obj["raw_bytes_b64"] = raw.clone().into();
+            }
+            obj
+        }).collect::<Vec<_>>(),
     });
 
     let json_bytes = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
