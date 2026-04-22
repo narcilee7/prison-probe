@@ -8,6 +8,7 @@ pub mod dns_leak;
 pub mod exit_ip;
 pub mod ja3_fingerprint;
 pub mod ssl_baseline;
+pub mod stun;
 pub mod sys_config;
 pub mod webrtc_leak;
 
