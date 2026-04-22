@@ -181,7 +181,7 @@ impl EvidenceStore {
         Ok(rows.next().transpose()?)
     }
 
-    /// 保存或更新证书基线
+    /// 保存或更新证书基线（首次建立或正常轮换时调用）
     pub fn save_cert_baseline(
         &self,
         domain: &str,
@@ -202,6 +202,20 @@ impl EvidenceStore {
             "#,
             params![domain, port, fingerprint, not_before, not_after],
         ).context("保存证书基线失败")?;
+
+        Ok(())
+    }
+
+    /// 仅更新证书基线的 last_seen 时间（指纹未变化时调用）
+    pub fn touch_cert_baseline(&self, domain: &str, port: u16) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE cert_baseline
+            SET last_seen = datetime('now')
+            WHERE domain = ?1 AND port = ?2
+            "#,
+            params![domain, port],
+        ).context("更新证书基线时间失败")?;
 
         Ok(())
     }

@@ -141,21 +141,13 @@ impl Probe for SSLBaselineProbe {
             .detail("not_after", &cert_info.not_after)
             .detail("baseline_exists", baseline.is_some());
 
-        // 保存新的基线
-        if let Some(ref s) = store {
-            s.save_cert_baseline(
-                &self.domain,
-                self.port,
-                &cert_info.fingerprint,
-                cert_info.not_before.as_deref(),
-                cert_info.not_after.as_deref(),
-            )
-            .ok();
-        }
-
         match baseline {
             Some(prev) => {
                 if prev.fingerprint == cert_info.fingerprint {
+                    // 指纹一致，仅更新 last_seen
+                    if let Some(ref s) = store {
+                        s.touch_cert_baseline(&self.domain, self.port).ok();
+                    }
                     Ok(details
                         .risk_level(RiskLevel::Clean)
                         .confidence(0.95)
@@ -170,6 +162,17 @@ impl Probe for SSLBaselineProbe {
                         is_normal_cert_rotation(&prev.not_after, &cert_info.not_before);
 
                     if is_normal_rotation {
+                        // 正常轮换：更新基线
+                        if let Some(ref s) = store {
+                            s.save_cert_baseline(
+                                &self.domain,
+                                self.port,
+                                &cert_info.fingerprint,
+                                cert_info.not_before.as_deref(),
+                                cert_info.not_after.as_deref(),
+                            )
+                            .ok();
+                        }
                         Ok(details
                             .risk_level(RiskLevel::Clean)
                             .confidence(0.8)
@@ -182,6 +185,7 @@ impl Probe for SSLBaselineProbe {
                             .mitigation("证书在正常轮换窗口内更新，属于预期行为")
                             .build())
                     } else {
+                        // 异常漂移：不覆盖基线，保留原始基线供用户比对
                         Ok(details
                             .risk_level(RiskLevel::Compromised)
                             .confidence(0.92)
@@ -192,13 +196,25 @@ impl Probe for SSLBaselineProbe {
                             ))
                             .detail("previous_fingerprint", &prev.fingerprint)
                             .detail("rotation_detected", false)
+                            .detail("baseline_preserved", true)
                             .mitigation("证书指纹异常变化，可能存在中间人攻击或企业 SSL 解密")
-                            .mitigation("请对比证书详情确认是否为合法证书更新")
+                            .mitigation("基线未被覆盖，请手动确认后删除数据库中的旧基线以重新建立")
                             .build())
                     }
                 }
             }
             None => {
+                // 首次建立基线
+                if let Some(ref s) = store {
+                    s.save_cert_baseline(
+                        &self.domain,
+                        self.port,
+                        &cert_info.fingerprint,
+                        cert_info.not_before.as_deref(),
+                        cert_info.not_after.as_deref(),
+                    )
+                    .ok();
+                }
                 Ok(details
                     .risk_level(RiskLevel::Clean)
                     .confidence(0.85)

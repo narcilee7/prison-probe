@@ -92,7 +92,6 @@ impl Probe for JA3FingerprintProbe {
         let (ja3_str, ja3_hash) = self.compute_ja3().await?;
 
         let baseline = load_ja3_baseline(&self.domain, self.port);
-        save_ja3_baseline(&self.domain, self.port, &ja3_str, &ja3_hash);
 
         let details = EvidenceBuilder::new(self.name())
             .detail("domain", &self.domain)
@@ -103,6 +102,7 @@ impl Probe for JA3FingerprintProbe {
 
         match baseline {
             Some(prev) if ja3_equivalent(&prev, &ja3_str) => {
+                // 指纹一致，无需更新
                 Ok(details
                     .risk_level(RiskLevel::Clean)
                     .confidence(0.92)
@@ -111,6 +111,7 @@ impl Probe for JA3FingerprintProbe {
                     .build())
             }
             Some(prev) => {
+                // 指纹漂移：不覆盖基线，保留原始基线供用户比对
                 Ok(details
                     .risk_level(RiskLevel::Compromised)
                     .confidence(0.88)
@@ -120,11 +121,15 @@ impl Probe for JA3FingerprintProbe {
                         &ja3_hash[..16]
                     ))
                     .detail("previous_ja3", prev)
+                    .detail("baseline_preserved", true)
                     .mitigation("TLS 指纹变化可能是代理层修改了握手参数")
                     .mitigation("也可能是企业级中间盒在进行 SSL 解密")
+                    .mitigation("基线未被覆盖，如需更新请手动删除 ja3-baseline 文件后重新扫描")
                     .build())
             }
             None => {
+                // 首次建立基线
+                save_ja3_baseline(&self.domain, self.port, &ja3_str, &ja3_hash);
                 Ok(details
                     .risk_level(RiskLevel::Clean)
                     .confidence(0.85)
