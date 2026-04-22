@@ -3,7 +3,8 @@ mod cli;
 use anyhow::{Context, Result};
 use clap::Parser;
 use crate::cli::{Cli, Commands, OutputFormat};
-use prison_probe_core::probe::{Evidence, ProbeContext, ProbeSuite, RiskLevel};
+use prison_probe_core::probe::{ProbeContext, ProbeSuite, RiskLevel};
+use prison_probe_core::report::{calculate_health_score, sha256_hex};
 use prison_probe_core::store::EvidenceStore;
 use serde_json::json;
 use std::io::{self, Write};
@@ -274,16 +275,6 @@ async fn run_export(cli: &Cli, output_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    use std::fmt::Write;
-    let hash = ring::digest::digest(&ring::digest::SHA256, data);
-    let mut hex = String::with_capacity(64);
-    for byte in hash.as_ref() {
-        write!(&mut hex, "{:02x}", byte).unwrap();
-    }
-    hex
-}
-
 async fn show_history(cli: &Cli, limit: usize) -> Result<()> {
     let store = EvidenceStore::open(&cli.db)
         .with_context(|| format!("打开数据库 {} 失败", cli.db))?;
@@ -353,26 +344,6 @@ async fn show_stats(cli: &Cli) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn calculate_health_score(results: &[Evidence]) -> u8 {
-    if results.is_empty() {
-        return 0;
-    }
-
-    let mut total_score = 0u32;
-    for ev in results {
-        let base = match ev.risk_level {
-            RiskLevel::Clean => 100u32,
-            RiskLevel::Suspicious => 50u32,
-            RiskLevel::Compromised => 0u32,
-        };
-        let weighted = (base as f32 * ev.confidence) as u32;
-        total_score += weighted;
-    }
-
-    let avg = total_score / results.len() as u32;
-    avg.min(100) as u8
 }
 
 fn print_health_bar(score: u8) {

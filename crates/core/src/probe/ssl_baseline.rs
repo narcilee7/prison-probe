@@ -86,7 +86,7 @@ impl SSLBaselineProbe {
         let der_bytes: &[u8] = end_entity.as_ref();
 
         // 计算 SHA-256 指纹
-        let fingerprint = sha256_hex(der_bytes);
+        let fingerprint = crate::report::sha256_hex(der_bytes);
 
         // 解析证书时间信息
         let (not_before, not_after) = parse_cert_times(der_bytes).unwrap_or((None, None));
@@ -279,17 +279,6 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
             rustls::SignatureScheme::ED25519,
         ]
     }
-}
-
-/// 计算 SHA-256 十六进制指纹
-fn sha256_hex(data: &[u8]) -> String {
-    use std::fmt::Write;
-    let hash = ring::digest::digest(&ring::digest::SHA256, data);
-    let mut hex = String::with_capacity(64);
-    for byte in hash.as_ref() {
-        write!(&mut hex, "{:02x}", byte).unwrap();
-    }
-    hex
 }
 
 /// 将 DER 证书转换为 PEM 格式
