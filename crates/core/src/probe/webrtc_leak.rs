@@ -1,8 +1,7 @@
-use crate::probe::{Evidence, EvidenceBuilder, Probe, ProbeCategory, ProbeContext, RiskLevel};
+use crate::probe::{stun, Evidence, EvidenceBuilder, Probe, ProbeCategory, ProbeContext, RiskLevel};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use rand::Rng;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::time::Duration;
 
 /// WebRTC 本地 IP 暴露检测器
@@ -41,8 +40,16 @@ impl WebRTCLeakProbe {
                 if octets[0] == 192 && octets[1] == 168 {
                     return true;
                 }
-                // 127.0.0.0/8 (loopback) — WebRTC 通常不会暴露 loopback，但我们也标记
+                // 127.0.0.0/8 (loopback)
                 if octets[0] == 127 {
+                    return true;
+                }
+                // 100.64.0.0/10 (CGNAT / carrier-grade NAT)
+                if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+                    return true;
+                }
+                // 169.254.0.0/16 (link-local)
+                if octets[0] == 169 && octets[1] == 254 {
                     return true;
                 }
                 false
@@ -66,15 +73,21 @@ impl WebRTCLeakProbe {
         }
     }
 
+    /// 判断接口名是否属于 VPN/TUN 类型
+    fn is_vpn_interface(&self, name: &str) -> bool {
+        let lower = name.to_lowercase();
+        [
+            "tun", "utun", "tap", "vpn", "wg", "wireguard", "ppp",
+            "ipsec", "l2tp", "pptp", "openvpn", "nordlynx", "proton",
+        ]
+        .iter()
+        .any(|&prefix| lower.contains(prefix))
+    }
+
     /// 通过 STUN 获取公网映射 IP
     async fn get_stun_mapped_ip(&self, timeout: Duration) -> Result<IpAddr> {
-        let stun_servers = [
-            ("stun.l.google.com", 19302),
-            ("stun1.l.google.com", 19302),
-        ];
-
-        for (host, port) in &stun_servers {
-            match query_stun_server(host, *port, timeout).await {
+        for (host, port) in stun::DEFAULT_STUN_SERVERS.iter().take(2) {
+            match stun::query_stun_server(host, *port, timeout).await {
                 Ok(ip) => return Ok(ip),
                 Err(e) => tracing::debug!(host, error = %e, "STUN query failed"),
             }
@@ -114,13 +127,20 @@ impl Probe for WebRTCLeakProbe {
             .cloned()
             .collect();
 
+        let vpn_interfaces: Vec<_> = local_ips
+            .iter()
+            .filter(|(name, _)| self.is_vpn_interface(name))
+            .cloned()
+            .collect();
+
         // 2. STUN 映射 IP
         let stun_result = self.get_stun_mapped_ip(ctx.timeout).await;
 
         let mut details = EvidenceBuilder::new(self.name())
             .detail("total_interfaces", local_ips.len())
             .detail("private_ips_count", private_ips.len())
-            .detail("non_loopback_private_count", non_loopback_private.len());
+            .detail("non_loopback_private_count", non_loopback_private.len())
+            .detail("vpn_interfaces_count", vpn_interfaces.len());
 
         // 记录所有接口
         let iface_list: Vec<_> = local_ips
@@ -129,13 +149,22 @@ impl Probe for WebRTCLeakProbe {
             .collect();
         details = details.detail("interfaces", iface_list);
 
+        // 记录 VPN 接口
+        if !vpn_interfaces.is_empty() {
+            let vpn_list: Vec<_> = vpn_interfaces
+                .iter()
+                .map(|(name, ip)| format!("{}: {}", name, ip))
+                .collect();
+            details = details.detail("vpn_interfaces", vpn_list);
+        }
+
         // 记录内网地址
         if !non_loopback_private.is_empty() {
             let leak_list: Vec<_> = non_loopback_private
                 .iter()
                 .map(|(name, ip)| format!("{}: {}", name, ip))
                 .collect();
-            details = details.detail("leaked_private_ips", leak_list);
+            details = details.detail("private_ips", leak_list);
         }
 
         // 记录 STUN 结果
@@ -148,36 +177,52 @@ impl Probe for WebRTCLeakProbe {
             }
         }
 
-        // 3. 风险判定
+        // 3. 风险判定（改进版：区分普通内网与 VPN 场景）
         if non_loopback_private.is_empty() {
-            // 没有内网地址（罕见，通常是容器/VPN 环境）
             Ok(details
                 .risk_level(RiskLevel::Clean)
                 .confidence(0.9)
                 .summary("未发现非 loopback 的内网 IP 地址")
                 .mitigation("当前网络环境可能为公网直连或容器化环境，WebRTC 本地 IP 暴露风险较低")
                 .build())
-        } else {
-            // 有内网地址！WebRTC 可能暴露
+        } else if vpn_interfaces.is_empty() {
+            // 普通内网环境（家庭/办公室）：WebRTC 暴露内网 IP 是预期行为，非漏洞
             let leaked = non_loopback_private
                 .iter()
                 .map(|(_, ip)| ip.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            let summary = format!(
-                "检测到 {} 个内网 IP 地址可能被 WebRTC 暴露: {}",
-                non_loopback_private.len(),
-                leaked
-            );
+            Ok(details
+                .risk_level(RiskLevel::Clean)
+                .confidence(0.75)
+                .summary(format!(
+                    "检测到 {} 个内网 IP (普通网络环境，WebRTC 暴露属预期行为): {}",
+                    non_loopback_private.len(),
+                    leaked
+                ))
+                .mitigation("在家庭/办公室等普通内网中，WebRTC 暴露本地 IP 是标准行为")
+                .mitigation("如使用 VPN，建议配合禁用 WebRTC 的浏览器扩展以确保隐私")
+                .build())
+        } else {
+            // 存在 VPN 接口 + 内网 IP：WebRTC 可能绕过 VPN 隧道
+            let leaked = non_loopback_private
+                .iter()
+                .map(|(_, ip)| ip.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
 
             Ok(details
-                .risk_level(RiskLevel::Compromised)
-                .confidence(0.88)
-                .summary(summary)
-                .mitigation("WebRTC 可能在建立 P2P 连接时暴露你的真实内网 IP 地址")
-                .mitigation("建议在浏览器或应用设置中禁用 WebRTC，或使用禁用 WebRTC 的浏览器扩展")
-                .mitigation("通过 VPN 时，WebRTC 可能绕过 VPN 隧道直接暴露本地 IP")
+                .risk_level(RiskLevel::Suspicious)
+                .confidence(0.82)
+                .summary(format!(
+                    "VPN 环境下检测到 {} 个内网 IP，WebRTC 可能绕过 VPN 隧道暴露: {}",
+                    non_loopback_private.len(),
+                    leaked
+                ))
+                .mitigation("WebRTC 可能通过本地接口绕过 VPN，暴露真实内网拓扑")
+                .mitigation("建议在浏览器中禁用 WebRTC，或使用 uBlock Origin / WebRTC Control 等扩展")
+                .mitigation("确认 VPN 是否提供 WebRTC 泄漏保护功能")
                 .build())
         }
     }
@@ -189,106 +234,55 @@ impl Default for WebRTCLeakProbe {
     }
 }
 
-/// 向 STUN 服务器发送 Binding Request 并解析响应中的 XOR-MAPPED-ADDRESS
-async fn query_stun_server(host: &str, port: u16, timeout: Duration) -> Result<IpAddr> {
-    let addrs: Vec<_> = tokio::net::lookup_host(format!("{}:{}", host, port))
-        .await
-        .context("STUN 服务器 DNS 解析失败")?
-        .collect();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let addr = addrs.into_iter().next().context("STUN 服务器无可用地址")?;
+    #[test]
+    fn test_private_ipv4() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(probe.is_private_ip("10.0.0.1".parse().unwrap()));
+        assert!(probe.is_private_ip("172.16.5.5".parse().unwrap()));
+        assert!(probe.is_private_ip("192.168.1.1".parse().unwrap()));
+        assert!(probe.is_private_ip("127.0.0.1".parse().unwrap()));
+        assert!(probe.is_private_ip("100.64.0.1".parse().unwrap()));
+        assert!(probe.is_private_ip("169.254.1.1".parse().unwrap()));
+    }
 
-    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0")
-        .await
-        .context("绑定 UDP socket 失败")?;
+    #[test]
+    fn test_public_ipv4() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(!probe.is_private_ip("8.8.8.8".parse().unwrap()));
+        assert!(!probe.is_private_ip("1.1.1.1".parse().unwrap()));
+        assert!(!probe.is_private_ip("203.0.113.1".parse().unwrap()));
+    }
 
-    // 构造 STUN Binding Request
-    let mut tx_id = [0u8; 12];
-    rand::thread_rng().fill(&mut tx_id);
+    #[test]
+    fn test_private_ipv6() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(probe.is_private_ip("fc00::1".parse().unwrap()));
+        assert!(probe.is_private_ip("fe80::1".parse().unwrap()));
+        assert!(probe.is_private_ip("::1".parse().unwrap()));
+    }
 
-    let mut request = Vec::with_capacity(20);
-    request.extend_from_slice(&0x0001u16.to_be_bytes()); // Binding Request
-    request.extend_from_slice(&0x0000u16.to_be_bytes()); // Message Length = 0
-    request.extend_from_slice(&0x2112A442u32.to_be_bytes()); // Magic Cookie
-    request.extend_from_slice(&tx_id); // Transaction ID
+    #[test]
+    fn test_public_ipv6() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(!probe.is_private_ip("2001:4860:4860::8888".parse().unwrap()));
+        assert!(!probe.is_private_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
 
-    socket
-        .send_to(&request, addr)
-        .await
-        .with_context(|| format!("向 STUN 服务器 {} 发送请求失败", addr))?;
-
-    let mut buf = [0u8; 512];
-    let result = tokio::time::timeout(timeout, socket.recv_from(&mut buf)).await;
-
-    let (len, _from) = match result {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(anyhow::anyhow!("接收 STUN 响应失败: {}", e)),
-        Err(_) => return Err(anyhow::anyhow!("STUN 查询超时")),
-    };
-
-    parse_stun_response(&buf[..len], &tx_id)
+    #[test]
+    fn test_vpn_interface_detection() {
+        let probe = WebRTCLeakProbe::new();
+        assert!(probe.is_vpn_interface("utun3"));
+        assert!(probe.is_vpn_interface("tun0"));
+        assert!(probe.is_vpn_interface("wg0"));
+        assert!(probe.is_vpn_interface("vpn-ipv4"));
+        assert!(!probe.is_vpn_interface("en0"));
+        assert!(!probe.is_vpn_interface("eth0"));
+        assert!(!probe.is_vpn_interface("Wi-Fi"));
+    }
 }
 
-/// 解析 STUN Binding Response，提取 XOR-MAPPED-ADDRESS 或 MAPPED-ADDRESS
-fn parse_stun_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<IpAddr> {
-    if buf.len() < 20 {
-        anyhow::bail!("STUN 响应过短");
-    }
 
-    let msg_type = u16::from_be_bytes([buf[0], buf[1]]);
-    let msg_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-    let magic = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
-
-    if magic != 0x2112A442 {
-        anyhow::bail!("无效的 STUN Magic Cookie: 0x{:08x}", magic);
-    }
-
-    if &buf[8..20] != expected_tx_id {
-        anyhow::bail!("STUN Transaction ID 不匹配");
-    }
-
-    if msg_type != 0x0101 {
-        anyhow::bail!("STUN 响应类型非成功: 0x{:04x}", msg_type);
-    }
-
-    let mut offset = 20;
-    let end = 20 + msg_len;
-
-    while offset + 4 <= end.min(buf.len()) {
-        let attr_type = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-        let attr_len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
-        offset += 4;
-
-        if offset + attr_len > buf.len() {
-            break;
-        }
-
-        let attr_data = &buf[offset..offset + attr_len];
-
-        // XOR-MAPPED-ADDRESS (0x0020)
-        if attr_type == 0x0020 && attr_len >= 8 {
-            let family = attr_data[1];
-            if family == 0x01 && attr_len >= 8 {
-                let x_addr = u32::from_be_bytes([attr_data[4], attr_data[5], attr_data[6], attr_data[7]]);
-                let addr = x_addr ^ 0x2112A442;
-                return Ok(IpAddr::V4(Ipv4Addr::from(addr)));
-            }
-        }
-
-        // MAPPED-ADDRESS (0x0001)
-        if attr_type == 0x0001 && attr_len >= 8 {
-            let family = attr_data[1];
-            if family == 0x01 && attr_len >= 8 {
-                let addr = u32::from_be_bytes([attr_data[4], attr_data[5], attr_data[6], attr_data[7]]);
-                return Ok(IpAddr::V4(Ipv4Addr::from(addr)));
-            }
-        }
-
-        offset += attr_len;
-        if offset % 4 != 0 {
-            offset += 4 - (offset % 4);
-        }
-    }
-
-    anyhow::bail!("STUN 响应中未找到 MAPPED-ADDRESS 属性")
-}

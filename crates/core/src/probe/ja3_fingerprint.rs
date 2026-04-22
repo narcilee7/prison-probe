@@ -25,52 +25,34 @@ impl JA3FingerprintProbe {
     async fn compute_ja3(&self) -> Result<(String, String)> {
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        let domain = self.domain.clone();
-        let port = self.port;
+        // 使用系统根证书验证配置。
+        // write_tls() 在此阶段只生成 ClientHello 字节，不会触发服务器证书验证，
+        // 但使用正常配置可避免未来误用此 config 进行不安全连接。
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
 
-        // 异步解析域名
-        let addrs: Vec<_> = tokio::net::lookup_host(format!("{}:{}", domain, port))
-            .await
-            .with_context(|| format!("域名解析失败: {}", domain))?
-            .collect();
+        let server_name = ServerName::try_from(self.domain.clone())
+            .map_err(|e| anyhow::anyhow!("无效的服务器名称: {}", e))?;
 
-        if addrs.is_empty() {
-            anyhow::bail!("域名解析无结果: {}", domain);
+        let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+            .context("创建 TLS 连接失败")?;
+
+        // 获取 ClientHello TLS 记录（纯内存操作，无需网络连接）
+        let mut buf = Vec::new();
+        let n = conn.write_tls(&mut buf)
+            .context("获取 TLS 记录失败")?;
+
+        if n == 0 {
+            anyhow::bail!("未能生成 ClientHello TLS 记录");
         }
 
-        tokio::task::spawn_blocking(move || {
-            let stream = std::net::TcpStream::connect_timeout(&addrs[0], Duration::from_secs(10))
-                .context("TCP 连接失败")?;
+        let ja3_str = parse_ja3_from_tls_records(&buf)?;
+        let ja3_hash = md5_hex(&ja3_str);
 
-            // 使用不验证证书的配置（我们只需要 ClientHello 字节）
-            let config = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoVerifier))
-                .with_no_client_auth();
-
-            let server_name = ServerName::try_from(domain)
-                .map_err(|e| anyhow::anyhow!("无效的服务器名称: {}", e))?;
-
-            let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
-                .context("创建 TLS 连接失败")?;
-
-            // 获取 ClientHello TLS 记录
-            let mut buf = Vec::new();
-            let n = conn.write_tls(&mut buf)
-                .context("获取 TLS 记录失败")?;
-
-            if n == 0 {
-                anyhow::bail!("未能生成 ClientHello TLS 记录");
-            }
-
-            // 关闭连接（我们只需要 ClientHello，不需要完成握手）
-            drop(stream);
-
-            let ja3_str = parse_ja3_from_tls_records(&buf)?;
-            let ja3_hash = md5_hex(&ja3_str);
-
-            Ok((ja3_str, ja3_hash))
-        }).await?
+        Ok((ja3_str, ja3_hash))
     }
 }
 
@@ -88,21 +70,33 @@ impl Probe for JA3FingerprintProbe {
         Duration::from_secs(15)
     }
 
-    async fn run(&self, _ctx: &ProbeContext) -> Result<Evidence> {
-        let (ja3_str, ja3_hash) = self.compute_ja3().await?;
+    async fn run(&self, ctx: &ProbeContext) -> Result<Evidence> {
+        let domain = if self.domain == "cloudflare.com" {
+            ctx.target_domain.clone()
+        } else {
+            self.domain.clone()
+        };
+        let port = if self.port == 443 {
+            ctx.target_port
+        } else {
+            self.port
+        };
 
-        let baseline = load_ja3_baseline(&self.domain, self.port);
-        save_ja3_baseline(&self.domain, self.port, &ja3_str, &ja3_hash);
+        let target = Self::new(&domain, port);
+        let (ja3_str, ja3_hash) = target.compute_ja3().await?;
+
+        let baseline = load_ja3_baseline(&domain, port);
 
         let details = EvidenceBuilder::new(self.name())
-            .detail("domain", &self.domain)
-            .detail("port", self.port)
+            .detail("domain", &domain)
+            .detail("port", port)
             .detail("ja3_hash", &ja3_hash)
             .detail("ja3_string", &ja3_str)
             .detail("baseline_exists", baseline.is_some());
 
         match baseline {
             Some(prev) if ja3_equivalent(&prev, &ja3_str) => {
+                // 指纹一致，无需更新
                 Ok(details
                     .risk_level(RiskLevel::Clean)
                     .confidence(0.92)
@@ -111,6 +105,7 @@ impl Probe for JA3FingerprintProbe {
                     .build())
             }
             Some(prev) => {
+                // 指纹漂移：不覆盖基线，保留原始基线供用户比对
                 Ok(details
                     .risk_level(RiskLevel::Compromised)
                     .confidence(0.88)
@@ -120,11 +115,15 @@ impl Probe for JA3FingerprintProbe {
                         &ja3_hash[..16]
                     ))
                     .detail("previous_ja3", prev)
+                    .detail("baseline_preserved", true)
                     .mitigation("TLS 指纹变化可能是代理层修改了握手参数")
                     .mitigation("也可能是企业级中间盒在进行 SSL 解密")
+                    .mitigation("基线未被覆盖，如需更新请手动删除 ja3-baseline 文件后重新扫描")
                     .build())
             }
             None => {
+                // 首次建立基线
+                save_ja3_baseline(&domain, port, &ja3_str, &ja3_hash);
                 Ok(details
                     .risk_level(RiskLevel::Clean)
                     .confidence(0.85)
@@ -209,7 +208,7 @@ fn parse_client_hello(ch: &[u8]) -> Result<String> {
     }
     let cipher_suites_len = u16::from_be_bytes([ch[offset], ch[offset + 1]]) as usize;
     offset += 2;
-    if ch.len() < offset + cipher_suites_len || cipher_suites_len % 2 != 0 {
+    if ch.len() < offset + cipher_suites_len || !cipher_suites_len.is_multiple_of(2) {
         anyhow::bail!("ClientHello 无效的 cipher suites 长度");
     }
     let mut ciphers = Vec::new();
@@ -349,7 +348,9 @@ fn save_ja3_baseline(domain: &str, port: u16, ja3_str: &str, _ja3_hash: &str) {
 }
 
 /// 解析 JA3 字符串为字段元组
-fn parse_ja3_fields(ja3: &str) -> Option<(u16, Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>)> {
+type Ja3Fields = (u16, Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>);
+
+fn parse_ja3_fields(ja3: &str) -> Option<Ja3Fields> {
     let parts: Vec<&str> = ja3.split(',').collect();
     if parts.len() != 5 {
         return None;
@@ -384,51 +385,6 @@ fn ja3_equivalent(a: &str, b: &str) -> bool {
     ea_sorted == eb_sorted
 }
 
-/// 不验证证书（仅用于获取 ClientHello 字节）
-#[derive(Debug)]
-struct NoVerifier;
-
-impl rustls::client::danger::ServerCertVerifier for NoVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ED25519,
-        ]
-    }
-}
 
 #[cfg(test)]
 mod tests {

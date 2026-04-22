@@ -182,57 +182,57 @@ impl SysConfigProbe {
         let mut risks = Vec::new();
 
         for s in settings {
-            // PAC 文件使用 HTTP
-            if let Some(ref url) = s.auto_proxy_url {
-                if url.starts_with("http://") {
+            // 本地 PAC 文件若非用户自行创建，可能存在恶意软件植入嫌疑
+            if let Some(ref url) = s.auto_proxy_url
+                && url.starts_with("file://")
+            {
+                let path = url.strip_prefix("file://").unwrap_or(url);
+                if std::path::Path::new(path).exists() {
                     risks.push((
-                        format!("服务 '{}' 的 PAC 文件使用未加密的 HTTP", s.service),
-                        "PAC 文件可通过中间人篡改，建议使用 HTTPS 或本地文件".to_string(),
+                        format!("服务 '{}' 使用本地 PAC 文件: {}", s.service, path),
+                        "本地 PAC 文件若非用户自行创建，可能存在恶意软件植入嫌疑".to_string(),
                     ));
                 }
-                if url.starts_with("file://") {
-                    let path = url.strip_prefix("file://").unwrap_or(url);
-                    // 检查文件是否由用户创建（简化：只检查是否存在）
-                    if std::path::Path::new(path).exists() {
+            }
+
+            // 绕过规则中若包含公网域名通配符，则属于可疑配置
+            for domain in &s.bypass_domains {
+                let d = domain.to_lowercase();
+                // 标准本地 bypass 规则是正常配置，不做告警
+                let is_standard_local = d == "localhost"
+                    || d == "127.0.0.1"
+                    || d == "::1"
+                    || d.ends_with(".local")
+                    || d.ends_with(".lan")
+                    || d.ends_with(".localhost");
+
+                if !is_standard_local {
+                    // 检测公网通配符绕过（如 *.com, *.cn）
+                    if d.starts_with("*.") && !d.contains("local") && !d.contains("lan") {
                         risks.push((
-                            format!("服务 '{}' 使用本地 PAC 文件: {}", s.service, path),
-                            "本地 PAC 文件若非用户自行创建，可能存在恶意软件植入嫌疑".to_string(),
+                            format!("服务 '{}' 存在公网域名通配符绕过规则: {}", s.service, domain),
+                            "公网通配符绕过可能导致大量流量绕过代理，存在数据泄漏风险".to_string(),
                         ));
                     }
                 }
             }
 
-            // 绕过规则可疑
-            for domain in &s.bypass_domains {
-                let d = domain.to_lowercase();
-                if d.contains("*.local") || d.contains("*.lan") || d == "localhost" || d == "127.0.0.1" {
-                    risks.push((
-                        format!("服务 '{}' 存在内部域名绕过规则: {}", s.service, domain),
-                        "内部域名绕过规则可能用于绕过特定流量监控".to_string(),
-                    ));
-                }
-            }
-
-            // SOCKS 代理（可能是代理工具如 Clash/V2Ray）
-            if s.socks_proxy.is_some() {
+            // HTTP 代理启用但 HTTPS 代理未启用：流量分裂风险
+            if s.web_proxy.is_some() && s.secure_web_proxy.is_none() {
                 risks.push((
-                    format!("服务 '{}' 启用了 SOCKS 代理", s.service),
-                    "SOCKS 代理通常由代理工具设置，请确认是否为本人配置".to_string(),
+                    format!("服务 '{}' 启用了 HTTP 代理但未启用 HTTPS 代理", s.service),
+                    "HTTPS 流量可能未经过代理，存在流量分裂和 DNS 泄漏风险".to_string(),
                 ));
             }
         }
 
-        // 环境变量代理
-        if env_proxies.contains_key("HTTP_PROXY") || env_proxies.contains_key("http_proxy") {
+        // 环境变量代理：仅在同时配置了 HTTP 和 ALL_PROXY（重复/冲突）时告警
+        let has_http_env = env_proxies.contains_key("HTTP_PROXY") || env_proxies.contains_key("http_proxy");
+        let has_all_env = env_proxies.contains_key("ALL_PROXY") || env_proxies.contains_key("all_proxy");
+        if has_http_env && has_all_env {
             risks.push((
-                "环境变量中配置了 HTTP_PROXY".to_string(),
-                "环境变量代理会影响所有使用该变量的程序，请确认配置来源".to_string(),
-            ));
-        }
-        if env_proxies.contains_key("ALL_PROXY") || env_proxies.contains_key("all_proxy") {
-            risks.push((
-                "环境变量中配置了 ALL_PROXY".to_string(),
-                "ALL_PROXY 会代理所有协议流量，请确认是否为预期配置".to_string(),
+                "环境变量中同时配置了 HTTP_PROXY 和 ALL_PROXY".to_string(),
+                "代理配置重复可能导致行为不可预期，请检查是否存在冲突".to_string(),
             ));
         }
 

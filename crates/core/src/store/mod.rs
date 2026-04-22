@@ -87,7 +87,7 @@ impl EvidenceStore {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// 查询最近的扫描历史
+    /// 查询最近的扫描历史（精简版）
     pub fn recent_scans(&self, limit: usize) -> Result<Vec<ScanRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -105,6 +105,41 @@ impl EvidenceStore {
                 risk_level: row.get(2)?,
                 confidence: row.get(3)?,
                 summary: row.get(4)?,
+                details: None,
+                mitigations: None,
+                raw_bytes: None,
+            })
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+
+        Ok(records)
+    }
+
+    /// 查询最近的扫描历史（完整取证版，包含 details / mitigations / raw_bytes）
+    pub fn recent_scans_full(&self, limit: usize) -> Result<Vec<ScanRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT timestamp, probe_name, risk_level, confidence, summary, details, mitigations, raw_bytes
+            FROM scan_history
+            ORDER BY timestamp DESC
+            LIMIT ?1
+            "#,
+        )?;
+
+        let rows = stmt.query_map([limit], |row| {
+            Ok(ScanRecord {
+                timestamp: row.get(0)?,
+                probe_name: row.get(1)?,
+                risk_level: row.get(2)?,
+                confidence: row.get(3)?,
+                summary: row.get(4)?,
+                details: row.get(5)?,
+                mitigations: row.get(6)?,
+                raw_bytes: row.get(7)?,
             })
         })?;
 
@@ -181,7 +216,7 @@ impl EvidenceStore {
         Ok(rows.next().transpose()?)
     }
 
-    /// 保存或更新证书基线
+    /// 保存或更新证书基线（首次建立或正常轮换时调用）
     pub fn save_cert_baseline(
         &self,
         domain: &str,
@@ -205,6 +240,20 @@ impl EvidenceStore {
 
         Ok(())
     }
+
+    /// 仅更新证书基线的 last_seen 时间（指纹未变化时调用）
+    pub fn touch_cert_baseline(&self, domain: &str, port: u16) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE cert_baseline
+            SET last_seen = datetime('now')
+            WHERE domain = ?1 AND port = ?2
+            "#,
+            params![domain, port],
+        ).context("更新证书基线时间失败")?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -214,6 +263,12 @@ pub struct ScanRecord {
     pub risk_level: String,
     pub confidence: f64,
     pub summary: String,
+    /// JSON 格式的 technical_details（仅在 full 查询时填充）
+    pub details: Option<String>,
+    /// JSON 格式的 mitigations 数组（仅在 full 查询时填充）
+    pub mitigations: Option<String>,
+    /// Base64 编码的原始证据（仅在 full 查询时填充）
+    pub raw_bytes: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -3,7 +3,8 @@ mod cli;
 use anyhow::{Context, Result};
 use clap::Parser;
 use crate::cli::{Cli, Commands, OutputFormat};
-use prison_probe_core::probe::{Evidence, ProbeContext, ProbeSuite, RiskLevel};
+use prison_probe_core::probe::{ProbeContext, ProbeSuite, RiskLevel};
+use prison_probe_core::report::{calculate_health_score, sha256_hex};
 use prison_probe_core::store::EvidenceStore;
 use serde_json::json;
 use std::io::{self, Write};
@@ -61,6 +62,8 @@ async fn run_quick_scan(cli: &Cli) -> Result<()> {
     let ctx = ProbeContext {
         timeout: Duration::from_secs(15),
         proxy_url: std::env::var("HTTP_PROXY").ok(),
+        target_domain: cli.target_domain.clone(),
+        target_port: cli.target_port,
     };
 
     let suite = ProbeSuite::quick_suite();
@@ -149,6 +152,8 @@ async fn run_deep_scan(cli: &Cli) -> Result<()> {
     let ctx = ProbeContext {
         timeout: Duration::from_secs(20),
         proxy_url: std::env::var("HTTP_PROXY").ok(),
+        target_domain: cli.target_domain.clone(),
+        target_port: cli.target_port,
     };
 
     let suite = ProbeSuite::deep_suite();
@@ -233,7 +238,7 @@ async fn run_export(cli: &Cli, output_path: &str) -> Result<()> {
     let store = EvidenceStore::open(&cli.db)
         .with_context(|| format!("打开数据库 {} 失败", cli.db))?;
 
-    let records = store.recent_scans(1000)?;
+    let records = store.recent_scans_full(1000)?;
 
     if records.is_empty() {
         println!("暂无扫描记录可导出");
@@ -245,13 +250,29 @@ async fn run_export(cli: &Cli, output_path: &str) -> Result<()> {
         "tool": "prison-probe",
         "version": env!("CARGO_PKG_VERSION"),
         "record_count": records.len(),
-        "records": records.iter().map(|r| json!({
-            "timestamp": r.timestamp,
-            "probe": r.probe_name,
-            "risk": r.risk_level,
-            "confidence": r.confidence,
-            "summary": r.summary,
-        })).collect::<Vec<_>>(),
+        "records": records.iter().map(|r| {
+            let mut obj = json!({
+                "timestamp": r.timestamp,
+                "probe": r.probe_name,
+                "risk": r.risk_level,
+                "confidence": r.confidence,
+                "summary": r.summary,
+            });
+            if let Some(ref details) = r.details
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details)
+            {
+                obj["technical_details"] = parsed;
+            }
+            if let Some(ref mitigations) = r.mitigations
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(mitigations)
+            {
+                obj["mitigations"] = parsed;
+            }
+            if let Some(ref raw) = r.raw_bytes {
+                obj["raw_bytes_b64"] = raw.clone().into();
+            }
+            obj
+        }).collect::<Vec<_>>(),
     });
 
     let json_bytes = serde_json::to_vec_pretty(&report)?;
@@ -272,16 +293,6 @@ async fn run_export(cli: &Cli, output_path: &str) -> Result<()> {
     println!("  SHA-256: {}", hash);
 
     Ok(())
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    use std::fmt::Write;
-    let hash = ring::digest::digest(&ring::digest::SHA256, data);
-    let mut hex = String::with_capacity(64);
-    for byte in hash.as_ref() {
-        write!(&mut hex, "{:02x}", byte).unwrap();
-    }
-    hex
 }
 
 async fn show_history(cli: &Cli, limit: usize) -> Result<()> {
@@ -355,34 +366,13 @@ async fn show_stats(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-fn calculate_health_score(results: &[Evidence]) -> u8 {
-    if results.is_empty() {
-        return 0;
-    }
-
-    let mut total_score = 0u32;
-    for ev in results {
-        let base = match ev.risk_level {
-            RiskLevel::Clean => 100u32,
-            RiskLevel::Suspicious => 50u32,
-            RiskLevel::Compromised => 0u32,
-        };
-        let weighted = (base as f32 * ev.confidence) as u32;
-        total_score += weighted;
-    }
-
-    let avg = total_score / results.len() as u32;
-    avg.min(100) as u8
-}
-
 fn print_health_bar(score: u8) {
     let bar_width = 40usize;
     let filled = (score as usize * bar_width / 100).max(1).min(bar_width);
     let empty = bar_width - filled;
 
-    let bar: String = std::iter::repeat('█')
-        .take(filled)
-        .chain(std::iter::repeat('░').take(empty))
+    let bar: String = std::iter::repeat_n('█', filled)
+        .chain(std::iter::repeat_n('░', empty))
         .collect();
 
     let color = if score >= 80 {
@@ -394,6 +384,6 @@ fn print_health_bar(score: u8) {
     };
     let reset = "\x1b[0m";
 
-    print!("  {}{}{}{}\n", color, bar, reset, reset);
+    println!("  {}{}{}{}", color, bar, reset, reset);
     io::stdout().flush().ok();
 }

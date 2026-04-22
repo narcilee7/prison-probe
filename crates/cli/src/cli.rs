@@ -15,6 +15,14 @@ pub struct Cli {
     /// 数据库路径
     #[arg(short, long, default_value = "prison-probe.db")]
     pub db: String,
+
+    /// SSL/JA3 探测目标域名（默认 cloudflare.com）
+    #[arg(long, default_value = "cloudflare.com")]
+    pub target_domain: String,
+
+    /// SSL/JA3 探测目标端口（默认 443）
+    #[arg(long, default_value = "443")]
+    pub target_port: u16,
 }
 
 #[derive(Subcommand)]

@@ -1,11 +1,10 @@
-use crate::probe::{Evidence, EvidenceBuilder, Probe, ProbeCategory, ProbeContext, RiskLevel};
+use crate::probe::{stun, Evidence, EvidenceBuilder, Probe, ProbeCategory, ProbeContext, RiskLevel};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hickory_resolver::{
     config::{ResolverConfig, ResolverOpts},
     TokioResolver,
 };
-use rand::Rng;
 use serde_json::json;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -63,15 +62,8 @@ impl ExitIPConsistencyProbe {
 
     /// 通过 STUN 协议获取公网 IP
     async fn get_ip_via_stun(&self, timeout: Duration) -> Result<IpAddr> {
-        // 公共 STUN 服务器列表
-        let stun_servers = [
-            ("stun.l.google.com", 19302),
-            ("stun1.l.google.com", 19302),
-            ("stun2.l.google.com", 19302),
-        ];
-
-        for (host, port) in &stun_servers {
-            match query_stun_server(host, *port, timeout).await {
+        for (host, port) in stun::DEFAULT_STUN_SERVERS {
+            match stun::query_stun_server(host, *port, timeout).await {
                 Ok(ip) => return Ok(ip),
                 Err(e) => tracing::debug!(host, error = %e, "STUN query failed"),
             }
@@ -275,6 +267,41 @@ impl Default for ExitIPConsistencyProbe {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ip_from_json_ip() {
+        let text = r#"{"ip": "1.2.3.4"}"#;
+        assert_eq!(parse_ip_from_text(text), Some("1.2.3.4".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_parse_ip_from_json_origin() {
+        let text = r#"{"origin": "203.0.113.5"}"#;
+        assert_eq!(parse_ip_from_text(text), Some("203.0.113.5".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_parse_ip_plain_text() {
+        let text = "  198.51.100.42  \n";
+        assert_eq!(parse_ip_from_text(text), Some("198.51.100.42".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_extract_ip_from_text() {
+        let text = "Your IP address is 192.0.2.1 and port 8080";
+        assert_eq!(extract_ip_from_text(text), Some("192.0.2.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_parse_ip_invalid() {
+        let text = "no ip here";
+        assert_eq!(parse_ip_from_text(text), None);
+    }
+}
+
 /// 从文本中解析 IP 地址
 fn parse_ip_from_text(text: &str) -> Option<IpAddr> {
     let trimmed = text.trim();
@@ -289,10 +316,10 @@ fn parse_ip_from_text(text: &str) -> Option<IpAddr> {
                 return Some(ip);
             }
         }
-        if let Some(origin_str) = json.get("origin").and_then(|v| v.as_str()) {
-            if let Ok(ip) = origin_str.parse::<IpAddr>() {
-                return Some(ip);
-            }
+        if let Some(origin_str) = json.get("origin").and_then(|v| v.as_str())
+            && let Ok(ip) = origin_str.parse::<IpAddr>()
+        {
+            return Some(ip);
         }
     }
 
@@ -317,115 +344,4 @@ fn extract_ip_from_text(text: &str) -> Option<IpAddr> {
     None
 }
 
-/// 向 STUN 服务器发送 Binding Request 并解析响应
-async fn query_stun_server(host: &str, port: u16, timeout: Duration) -> Result<IpAddr> {
-    let addrs: Vec<_> = tokio::net::lookup_host(format!("{}:{}", host, port))
-        .await
-        .context("STUN 服务器 DNS 解析失败")?
-        .collect();
 
-    let addr = addrs.into_iter().next().context("STUN 服务器无可用地址")?;
-
-    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0")
-        .await
-        .context("绑定 UDP socket 失败")?;
-
-    // 构造 STUN Binding Request
-    let mut tx_id = [0u8; 12];
-    rand::thread_rng().fill(&mut tx_id);
-
-    let mut request = Vec::with_capacity(20);
-    request.extend_from_slice(&0x0001u16.to_be_bytes()); // Binding Request
-    request.extend_from_slice(&0x0000u16.to_be_bytes()); // Message Length = 0
-    request.extend_from_slice(&0x2112A442u32.to_be_bytes()); // Magic Cookie
-    request.extend_from_slice(&tx_id); // Transaction ID
-
-    socket
-        .send_to(&request, addr)
-        .await
-        .with_context(|| format!("向 STUN 服务器 {} 发送请求失败", addr))?;
-
-    let mut buf = [0u8; 512];
-    let result = tokio::time::timeout(timeout, socket.recv_from(&mut buf)).await;
-
-    let (len, _from) = match result {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(anyhow::anyhow!("接收 STUN 响应失败: {}", e)),
-        Err(_) => return Err(anyhow::anyhow!("STUN 查询超时")),
-    };
-
-    parse_stun_response(&buf[..len], &tx_id)
-}
-
-/// 解析 STUN Binding Response，提取 XOR-MAPPED-ADDRESS 或 MAPPED-ADDRESS
-fn parse_stun_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<IpAddr> {
-    if buf.len() < 20 {
-        anyhow::bail!("STUN 响应过短");
-    }
-
-    let msg_type = u16::from_be_bytes([buf[0], buf[1]]);
-    let msg_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-    let magic = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
-
-    if magic != 0x2112A442 {
-        anyhow::bail!("无效的 STUN Magic Cookie: 0x{:08x}", magic);
-    }
-
-    if &buf[8..20] != expected_tx_id {
-        anyhow::bail!("STUN Transaction ID 不匹配");
-    }
-
-    // 0x0101 = Binding Success Response
-    if msg_type != 0x0101 {
-        anyhow::bail!("STUN 响应类型非成功: 0x{:04x}", msg_type);
-    }
-
-    // 解析属性
-    let mut offset = 20;
-    let end = 20 + msg_len;
-
-    while offset + 4 <= end.min(buf.len()) {
-        let attr_type = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-        let attr_len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
-        offset += 4;
-
-        if offset + attr_len > buf.len() {
-            break;
-        }
-
-        let attr_data = &buf[offset..offset + attr_len];
-
-        // 0x0020 = XOR-MAPPED-ADDRESS
-        if attr_type == 0x0020 && attr_len >= 8 {
-            let family = attr_data[1];
-            let x_port = u16::from_be_bytes([attr_data[2], attr_data[3]]);
-            let _port = x_port ^ 0x2112; // XOR with upper 16 bits of magic cookie
-
-            if family == 0x01 && attr_len >= 8 {
-                // IPv4
-                let x_addr = u32::from_be_bytes([attr_data[4], attr_data[5], attr_data[6], attr_data[7]]);
-                let addr = x_addr ^ 0x2112A442; // XOR with magic cookie
-                let ip = Ipv4Addr::from(addr);
-                return Ok(IpAddr::V4(ip));
-            }
-        }
-
-        // 0x0001 = MAPPED-ADDRESS (fallback)
-        if attr_type == 0x0001 && attr_len >= 8 {
-            let family = attr_data[1];
-            if family == 0x01 && attr_len >= 8 {
-                let addr = u32::from_be_bytes([attr_data[4], attr_data[5], attr_data[6], attr_data[7]]);
-                let ip = Ipv4Addr::from(addr);
-                return Ok(IpAddr::V4(ip));
-            }
-        }
-
-        // 对齐到 4 字节边界
-        offset += attr_len;
-        if offset % 4 != 0 {
-            offset += 4 - (offset % 4);
-        }
-    }
-
-    anyhow::bail!("STUN 响应中未找到 MAPPED-ADDRESS 属性")
-}

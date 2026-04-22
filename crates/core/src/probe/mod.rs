@@ -8,6 +8,7 @@ pub mod dns_leak;
 pub mod exit_ip;
 pub mod ja3_fingerprint;
 pub mod ssl_baseline;
+pub mod stun;
 pub mod sys_config;
 pub mod webrtc_leak;
 
@@ -50,6 +51,10 @@ pub enum ProbeCategory {
 pub struct ProbeContext {
     pub timeout: Duration,
     pub proxy_url: Option<String>,
+    /// SSL/JA3 探测的目标域名，默认为 cloudflare.com
+    pub target_domain: String,
+    /// SSL/JA3 探测的目标端口，默认为 443
+    pub target_port: u16,
 }
 
 impl Default for ProbeContext {
@@ -57,6 +62,8 @@ impl Default for ProbeContext {
         Self {
             timeout: Duration::from_secs(10),
             proxy_url: None,
+            target_domain: "cloudflare.com".to_string(),
+            target_port: 443,
         }
     }
 }
@@ -197,47 +204,45 @@ impl ProbeSuite {
     }
 
     pub async fn execute(&self, ctx: &ProbeContext) -> Vec<Evidence> {
-        let mut results = Vec::with_capacity(self.probes.len());
+        use futures::future::join_all;
 
-        for probe in &self.probes {
+        let futures = self.probes.iter().map(|probe| {
             let name = probe.name();
             let timeout = probe.timeout();
             let probe_ctx = ProbeContext { timeout, ..ctx.clone() };
 
-            let result = tokio::time::timeout(timeout, probe.run(&probe_ctx)).await;
+            async move {
+                let result = tokio::time::timeout(timeout, probe.run(&probe_ctx)).await;
 
-            match result {
-                Ok(Ok(evidence)) => {
-                    tracing::info!(probe = name, risk = ?evidence.risk_level, "probe completed");
-                    results.push(evidence);
-                }
-                Ok(Err(e)) => {
-                    tracing::error!(probe = name, error = %e, "probe failed");
-                    results.push(
+                match result {
+                    Ok(Ok(evidence)) => {
+                        tracing::info!(probe = name, risk = ?evidence.risk_level, "probe completed");
+                        evidence
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(probe = name, error = %e, "probe failed");
                         Evidence::builder(name)
                             .risk_level(RiskLevel::Suspicious)
                             .confidence(0.5)
                             .summary(format!("探测器执行失败: {}", e))
                             .detail("error", e.to_string())
                             .mitigation("请检查网络连接并重新运行扫描")
-                            .build(),
-                    );
-                }
-                Err(_) => {
-                    tracing::warn!(probe = name, "probe timed out");
-                    results.push(
+                            .build()
+                    }
+                    Err(_) => {
+                        tracing::warn!(probe = name, "probe timed out");
                         Evidence::builder(name)
                             .risk_level(RiskLevel::Suspicious)
                             .confidence(0.5)
                             .summary(format!("探测器超时 (>{:?})", timeout))
                             .mitigation("请检查网络连接或稍后重试")
-                            .build(),
-                    );
+                            .build()
+                    }
                 }
             }
-        }
+        });
 
-        results
+        join_all(futures).await
     }
 
     pub fn len(&self) -> usize {
@@ -332,10 +337,14 @@ mod tests {
         let ctx = ProbeContext {
             timeout: Duration::from_secs(5),
             proxy_url: Some("http://127.0.0.1:7890".to_string()),
+            target_domain: "example.com".to_string(),
+            target_port: 8443,
         };
         let cloned = ctx.clone();
         assert_eq!(cloned.timeout, ctx.timeout);
         assert_eq!(cloned.proxy_url, ctx.proxy_url);
+        assert_eq!(cloned.target_domain, ctx.target_domain);
+        assert_eq!(cloned.target_port, ctx.target_port);
     }
 
     #[test]
@@ -343,6 +352,8 @@ mod tests {
         let ctx = ProbeContext::default();
         assert_eq!(ctx.timeout, Duration::from_secs(10));
         assert!(ctx.proxy_url.is_none());
+        assert_eq!(ctx.target_domain, "cloudflare.com");
+        assert_eq!(ctx.target_port, 443);
     }
 
     #[test]
