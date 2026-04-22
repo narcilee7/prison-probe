@@ -258,15 +258,15 @@ async fn run_export(cli: &Cli, output_path: &str) -> Result<()> {
                 "confidence": r.confidence,
                 "summary": r.summary,
             });
-            if let Some(ref details) = r.details {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details) {
-                    obj["technical_details"] = parsed;
-                }
+            if let Some(ref details) = r.details
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details)
+            {
+                obj["technical_details"] = parsed;
             }
-            if let Some(ref mitigations) = r.mitigations {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(mitigations) {
-                    obj["mitigations"] = parsed;
-                }
+            if let Some(ref mitigations) = r.mitigations
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(mitigations)
+            {
+                obj["mitigations"] = parsed;
             }
             if let Some(ref raw) = r.raw_bytes {
                 obj["raw_bytes_b64"] = raw.clone().into();
@@ -371,9 +371,8 @@ fn print_health_bar(score: u8) {
     let filled = (score as usize * bar_width / 100).max(1).min(bar_width);
     let empty = bar_width - filled;
 
-    let bar: String = std::iter::repeat('█')
-        .take(filled)
-        .chain(std::iter::repeat('░').take(empty))
+    let bar: String = std::iter::repeat_n('█', filled)
+        .chain(std::iter::repeat_n('░', empty))
         .collect();
 
     let color = if score >= 80 {
@@ -385,6 +384,6 @@ fn print_health_bar(score: u8) {
     };
     let reset = "\x1b[0m";
 
-    print!("  {}{}{}{}\n", color, bar, reset, reset);
+    println!("  {}{}{}{}", color, bar, reset, reset);
     io::stdout().flush().ok();
 }

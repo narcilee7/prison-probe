@@ -208,7 +208,7 @@ fn parse_client_hello(ch: &[u8]) -> Result<String> {
     }
     let cipher_suites_len = u16::from_be_bytes([ch[offset], ch[offset + 1]]) as usize;
     offset += 2;
-    if ch.len() < offset + cipher_suites_len || cipher_suites_len % 2 != 0 {
+    if ch.len() < offset + cipher_suites_len || !cipher_suites_len.is_multiple_of(2) {
         anyhow::bail!("ClientHello 无效的 cipher suites 长度");
     }
     let mut ciphers = Vec::new();
@@ -348,7 +348,9 @@ fn save_ja3_baseline(domain: &str, port: u16, ja3_str: &str, _ja3_hash: &str) {
 }
 
 /// 解析 JA3 字符串为字段元组
-fn parse_ja3_fields(ja3: &str) -> Option<(u16, Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>)> {
+type Ja3Fields = (u16, Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>);
+
+fn parse_ja3_fields(ja3: &str) -> Option<Ja3Fields> {
     let parts: Vec<&str> = ja3.split(',').collect();
     if parts.len() != 5 {
         return None;

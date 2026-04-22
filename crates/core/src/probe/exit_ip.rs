@@ -281,10 +281,10 @@ fn parse_ip_from_text(text: &str) -> Option<IpAddr> {
                 return Some(ip);
             }
         }
-        if let Some(origin_str) = json.get("origin").and_then(|v| v.as_str()) {
-            if let Ok(ip) = origin_str.parse::<IpAddr>() {
-                return Some(ip);
-            }
+        if let Some(origin_str) = json.get("origin").and_then(|v| v.as_str())
+            && let Ok(ip) = origin_str.parse::<IpAddr>()
+        {
+            return Some(ip);
         }
     }
 

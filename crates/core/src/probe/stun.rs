@@ -152,7 +152,7 @@ fn parse_stun_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<IpAddr> 
 }
 
 fn align_offset(offset: &mut usize) {
-    if *offset % 4 != 0 {
+    if !(*offset).is_multiple_of(4) {
         *offset += 4 - (*offset % 4);
     }
 }

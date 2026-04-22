@@ -183,15 +183,15 @@ impl SysConfigProbe {
 
         for s in settings {
             // 本地 PAC 文件若非用户自行创建，可能存在恶意软件植入嫌疑
-            if let Some(ref url) = s.auto_proxy_url {
-                if url.starts_with("file://") {
-                    let path = url.strip_prefix("file://").unwrap_or(url);
-                    if std::path::Path::new(path).exists() {
-                        risks.push((
-                            format!("服务 '{}' 使用本地 PAC 文件: {}", s.service, path),
-                            "本地 PAC 文件若非用户自行创建，可能存在恶意软件植入嫌疑".to_string(),
-                        ));
-                    }
+            if let Some(ref url) = s.auto_proxy_url
+                && url.starts_with("file://")
+            {
+                let path = url.strip_prefix("file://").unwrap_or(url);
+                if std::path::Path::new(path).exists() {
+                    risks.push((
+                        format!("服务 '{}' 使用本地 PAC 文件: {}", s.service, path),
+                        "本地 PAC 文件若非用户自行创建，可能存在恶意软件植入嫌疑".to_string(),
+                    ));
                 }
             }
 
